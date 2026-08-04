@@ -12,6 +12,12 @@ const empleadosRoutes = require('./routes/empleados.routes');
 const gastosRoutes = require('./routes/gastos.routes');
 const logisticaRoutes = require('./routes/logistica.routes');
 const estadisticasRoutes = require('./routes/estadisticas.routes');
+const devolucionesRoutes = require('./routes/devoluciones.routes');
+const usuariosRoutes = require('./routes/usuarios.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
+const notificacionesRoutes = require('./routes/notificaciones.routes');
+const busquedaRoutes = require('./routes/busqueda.routes');
+const presupuestosRoutes = require('./routes/presupuestos.routes');
 
 const app = express();
 
@@ -30,6 +36,12 @@ app.use('/api/empleados', empleadosRoutes);
 app.use('/api/gastos', gastosRoutes);
 app.use('/api/logistica', logisticaRoutes);
 app.use('/api/estadisticas', estadisticasRoutes);
+app.use('/api/devoluciones', devolucionesRoutes);
+app.use('/api/usuarios', usuariosRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/notificaciones', notificacionesRoutes);
+app.use('/api/busqueda', busquedaRoutes);
+app.use('/api/presupuestos', presupuestosRoutes);
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {

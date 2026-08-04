@@ -1,5 +1,18 @@
 const pool = require('../config/db');
 
+// Genera un número correlativo tipo OV-000123 (busca el último y suma 1)
+async function generarNumero(conexion) {
+  const [rows] = await conexion.query(
+    "SELECT numero FROM ordenes_venta WHERE numero LIKE 'OV-%' ORDER BY id DESC LIMIT 1 FOR UPDATE"
+  );
+  let siguiente = 1;
+  if (rows[0]) {
+    const ultimo = parseInt(rows[0].numero.replace('OV-', ''), 10);
+    if (!Number.isNaN(ultimo)) siguiente = ultimo + 1;
+  }
+  return `OV-${String(siguiente).padStart(6, '0')}`;
+}
+
 async function listar(req, res) {
   try {
     const { estado, cliente_id, desde, hasta } = req.query;
@@ -49,14 +62,15 @@ async function obtener(req, res) {
 async function crear(req, res) {
   const conexion = await pool.getConnection();
   try {
-    const { numero, cliente_id, almacen_id, fecha, items } = req.body;
-    if (!numero || !cliente_id || !almacen_id || !fecha || !Array.isArray(items) || items.length === 0) {
+    const { cliente_id, almacen_id, fecha, items } = req.body;
+    if (!cliente_id || !almacen_id || !fecha || !Array.isArray(items) || items.length === 0) {
       conexion.release();
       return res.status(400).json({ error: 'Faltan datos obligatorios o la orden no tiene items' });
     }
 
     await conexion.beginTransaction();
 
+    const numero = await generarNumero(conexion);
     const total = items.reduce((acc, it) => acc + it.cantidad * it.precio_unitario, 0);
 
     const [ordenResult] = await conexion.query(

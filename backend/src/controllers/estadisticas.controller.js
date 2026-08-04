@@ -21,6 +21,12 @@ async function resumen(req, res) {
       rango
     );
 
+    const [[ordenesSinRecibir]] = await pool.query(
+      `SELECT COUNT(*) AS cantidad, COALESCE(SUM(total),0) AS total
+       FROM ordenes_compra WHERE estado IN ('borrador','enviada','parcial') ${filtroFecha}`,
+      rango
+    );
+
     const filtroFechaPago = filtroFecha.replace(/fecha/g, 'fecha_pago');
     const [[pagos]] = await pool.query(
       `SELECT COUNT(*) AS cantidad, COALESCE(SUM(monto),0) AS total
@@ -50,7 +56,7 @@ async function resumen(req, res) {
       rango
     );
 
-    res.json({ ventas, compras, pagos, gastos, pagosPorMetodo, topProductos });
+    res.json({ ventas, compras, ordenesSinRecibir, pagos, gastos, pagosPorMetodo, topProductos });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al calcular estadísticas' });

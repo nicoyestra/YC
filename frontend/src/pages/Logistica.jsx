@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import api from '../api/client';
 
 const VACIO = { tipo: 'despacho', cliente_id: '', orden_venta_id: '', direccion: '', codigo_postal: '', fecha: '', notas: '' };
@@ -10,6 +10,8 @@ export default function Logistica() {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevo, setNuevo] = useState(VACIO);
   const [error, setError] = useState('');
+  const [expandido, setExpandido] = useState(null);
+  const [detalleOrden, setDetalleOrden] = useState(null);
 
   async function cargar() {
     const [logRes, cliRes, ordRes] = await Promise.all([
@@ -56,6 +58,17 @@ export default function Logistica() {
     } catch (err) {
       setError(err.response?.data?.error || 'Error al actualizar el estado');
     }
+  }
+
+  async function verDetalle(ordenVentaId, registroId) {
+    if (expandido === registroId) {
+      setExpandido(null);
+      setDetalleOrden(null);
+      return;
+    }
+    setExpandido(registroId);
+    const { data } = await api.get(`/ventas/ordenes/${ordenVentaId}`);
+    setDetalleOrden(data);
   }
 
   return (
@@ -120,30 +133,59 @@ export default function Logistica() {
 
       <div className="tarjeta">
         <table>
-          <thead><tr><th>Tipo</th><th>Cliente</th><th>Dirección</th><th>Fecha</th><th>Estado</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Tipo</th><th>Cliente</th><th>Dirección</th><th>Fecha</th><th>Estado</th><th>Orden</th><th>Acciones</th></tr></thead>
           <tbody>
             {registros.map((r) => (
-              <tr key={r.id}>
-                <td>{r.tipo}</td>
-                <td>{r.cliente_nombre}</td>
-                <td>{r.direccion || '—'} {r.codigo_postal && `(CP ${r.codigo_postal})`}</td>
-                <td>{String(r.fecha).slice(0, 10)}</td>
-                <td>{r.estado}</td>
-                <td>
-                  {r.estado !== 'completado' && r.estado !== 'cancelado' && (
-                    <select
-                      value={r.estado}
-                      onChange={(e) => cambiarEstado(r.id, e.target.value)}
-                      style={{ marginBottom: 0, width: 'auto' }}
-                    >
-                      <option value="pendiente">Pendiente</option>
-                      <option value="en_curso">En curso</option>
-                      <option value="completado">Completado</option>
-                      <option value="cancelado">Cancelado</option>
-                    </select>
-                  )}
-                </td>
-              </tr>
+              <Fragment key={r.id}>
+                <tr>
+                  <td>{r.tipo}</td>
+                  <td>{r.cliente_nombre}</td>
+                  <td>{r.direccion || '—'} {r.codigo_postal && `(CP ${r.codigo_postal})`}</td>
+                  <td>{String(r.fecha).slice(0, 10)}</td>
+                  <td>{r.estado}</td>
+                  <td>
+                    {r.orden_venta_id ? (
+                      <button className="boton boton-secundario" onClick={() => verDetalle(r.orden_venta_id, r.id)}>
+                        {expandido === r.id ? 'Ocultar' : `Ver ${r.orden_venta_numero || 'ítems'}`}
+                      </button>
+                    ) : '—'}
+                  </td>
+                  <td>
+                    {r.estado !== 'completado' && r.estado !== 'cancelado' && (
+                      <select
+                        value={r.estado}
+                        onChange={(e) => cambiarEstado(r.id, e.target.value)}
+                        style={{ marginBottom: 0, width: 'auto' }}
+                      >
+                        <option value="pendiente">Pendiente</option>
+                        <option value="en_curso">En curso</option>
+                        <option value="completado">Completado</option>
+                        <option value="cancelado">Cancelado</option>
+                      </select>
+                    )}
+                  </td>
+                </tr>
+                {expandido === r.id && detalleOrden && (
+                  <tr>
+                    <td colSpan={7}>
+                      <table>
+                        <thead><tr><th>SKU</th><th>Producto</th><th>Cantidad</th><th>Precio unit.</th><th>Subtotal</th></tr></thead>
+                        <tbody>
+                          {detalleOrden.detalle.map((d) => (
+                            <tr key={d.id}>
+                              <td>{d.sku}</td>
+                              <td>{d.producto_nombre}</td>
+                              <td>{d.cantidad}</td>
+                              <td>${Number(d.precio_unitario).toFixed(2)}</td>
+                              <td>${Number(d.subtotal).toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
