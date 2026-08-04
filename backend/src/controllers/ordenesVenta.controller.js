@@ -162,4 +162,168 @@ async function confirmar(req, res) {
   }
 }
 
-module.exports = { listar, obtener, crear, confirmar };
+
+// Cancela una orden pendiente o confirmada.
+// Si estaba confirmada, devuelve automáticamente el stock al almacén.
+async function cancelar(req, res) {
+  const conexion = await pool.getConnection();
+
+  try {
+    const ordenId = req.params.id;
+
+    await conexion.beginTransaction();
+
+    const [ordenRows] = await conexion.query(
+      'SELECT * FROM ordenes_venta WHERE id = ? FOR UPDATE',
+      [ordenId]
+    );
+
+    const orden = ordenRows[0];
+
+    if (!orden) {
+      await conexion.rollback();
+      return res.status(404).json({ error: 'Orden no encontrada' });
+    }
+
+    if (orden.estado === 'cancelada') {
+      await conexion.rollback();
+      return res.status(400).json({ error: 'La orden ya está cancelada' });
+    }
+
+    if (orden.estado === 'entregada') {
+      await conexion.rollback();
+      return res.status(400).json({
+        error: 'Una orden entregada no puede cancelarse. Debe registrarse una devolución.'
+      });
+    }
+
+    if (!['pendiente', 'confirmada'].includes(orden.estado)) {
+      await conexion.rollback();
+      return res.status(400).json({
+        error: `No se puede cancelar una orden en estado "${orden.estado}"`
+      });
+    }
+
+    // Si la orden estaba confirmada, el stock ya había sido descontado.
+    // Por lo tanto, debe devolverse al inventario.
+    if (orden.estado === 'confirmada') {
+      const [items] = await conexion.query(
+        'SELECT * FROM detalle_ordenes_venta WHERE orden_venta_id = ?',
+        [ordenId]
+      );
+
+      for (const item of items) {
+        await conexion.query(
+          `INSERT INTO stock (producto_id, almacen_id, cantidad)
+           VALUES (?, ?, ?)
+           ON DUPLICATE KEY UPDATE cantidad = cantidad + VALUES(cantidad)`,
+          [item.producto_id, orden.almacen_id, item.cantidad]
+        );
+
+        await conexion.query(
+          `INSERT INTO movimientos_inventario
+           (
+             producto_id,
+             almacen_id,
+             tipo,
+             cantidad,
+             motivo,
+             referencia_tipo,
+             referencia_id,
+             usuario_id
+           )
+           VALUES (?, ?, 'entrada', ?, ?, 'venta', ?, ?)`,
+          [
+            item.producto_id,
+            orden.almacen_id,
+            item.cantidad,
+            `Cancelación de venta ${orden.numero}`,
+            ordenId,
+            req.usuario.id
+          ]
+        );
+      }
+    }
+
+    await conexion.query(
+      "UPDATE ordenes_venta SET estado = 'cancelada' WHERE id = ?",
+      [ordenId]
+    );
+
+    await conexion.commit();
+
+    res.json({
+      mensaje:
+        orden.estado === 'confirmada'
+          ? 'Orden cancelada y stock devuelto correctamente'
+          : 'Orden pendiente cancelada correctamente',
+      estado: 'cancelada'
+    });
+  } catch (err) {
+    await conexion.rollback();
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar la orden de venta' });
+  } finally {
+    conexion.release();
+  }
+}
+
+
+// Marca como entregada una orden previamente confirmada.
+// No vuelve a modificar el stock porque ya fue descontado al confirmar.
+async function entregar(req, res) {
+  const conexion = await pool.getConnection();
+
+  try {
+    const ordenId = req.params.id;
+
+    await conexion.beginTransaction();
+
+    const [ordenRows] = await conexion.query(
+      'SELECT * FROM ordenes_venta WHERE id = ? FOR UPDATE',
+      [ordenId]
+    );
+
+    const orden = ordenRows[0];
+
+    if (!orden) {
+      await conexion.rollback();
+      return res.status(404).json({ error: 'Orden no encontrada' });
+    }
+
+    if (orden.estado !== 'confirmada') {
+      await conexion.rollback();
+      return res.status(400).json({
+        error: `Solo se puede entregar una orden confirmada. Estado actual: "${orden.estado}"`
+      });
+    }
+
+    await conexion.query(
+      "UPDATE ordenes_venta SET estado = 'entregada' WHERE id = ?",
+      [ordenId]
+    );
+
+    await conexion.commit();
+
+    res.json({
+      mensaje: 'Orden marcada como entregada',
+      estado: 'entregada'
+    });
+  } catch (err) {
+    await conexion.rollback();
+    console.error(err);
+    res.status(500).json({ error: 'Error al entregar la orden de venta' });
+  } finally {
+    conexion.release();
+  }
+}
+
+
+module.exports = {
+  listar,
+  obtener,
+  crear,
+  confirmar,
+  cancelar,
+  entregar
+};

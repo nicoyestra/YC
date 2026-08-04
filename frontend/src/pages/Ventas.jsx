@@ -195,6 +195,37 @@ export default function Ventas() {
     }
   }
 
+async function cancelarOrden(id) {
+  setError('');
+
+  try {
+    await api.post(`/ventas/ordenes/${id}/cancelar`);
+    await cargar(filtroEstado);
+  } catch (err) {
+    setError(
+      err.response?.data?.error ||
+      'Error al cancelar la orden.'
+    );
+  }
+}
+
+async function entregarOrden(id) {
+  setError('');
+
+  try {
+    await api.post(`/ventas/ordenes/${id}/entregar`);
+    await cargar(filtroEstado);
+  } catch (err) {
+    setError(
+      err.response?.data?.error ||
+      'Error al entregar la orden.'
+    );
+  }
+}
+
+
+
+
   async function verDetalle(id) {
     if (ordenExpandida === id) {
       setOrdenExpandida(null);
@@ -656,17 +687,59 @@ export default function Ventas() {
                         : 'Ver ítems'}
                     </button>
 
-                    {orden.estado === 'pendiente' && (
-                      <button
-                        type="button"
-                        className="boton"
-                        onClick={() =>
-                          confirmarOrden(orden.id)
-                        }
-                      >
-                        Confirmar (descuenta stock)
-                      </button>
-                    )}
+                  
+{orden.estado === 'pendiente' && (
+  <>
+    <button
+      type="button"
+      className="boton"
+      onClick={() => confirmarOrden(orden.id)}
+    >
+      Confirmar
+    </button>
+
+    <button
+      type="button"
+      className="boton boton-secundario"
+      style={{
+        background: "#dc2626",
+        color: "#fff"
+      }}
+      onClick={() => cancelarOrden(orden.id)}
+    >
+      Cancelar
+    </button>
+  </>
+)}
+
+{orden.estado === 'confirmada' && (
+  <>
+    <button
+      type="button"
+      className="boton"
+      style={{
+        background: "#16a34a"
+      }}
+      onClick={() => entregarOrden(orden.id)}
+    >
+      Entregar
+    </button>
+
+    <button
+      type="button"
+      className="boton boton-secundario"
+      style={{
+        background: "#dc2626",
+        color: "#fff"
+      }}
+      onClick={() => cancelarOrden(orden.id)}
+    >
+      Cancelar
+    </button>
+  </>
+)}
+
+
                   </td>
                 </tr>
 

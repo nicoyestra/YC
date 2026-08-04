@@ -18,5 +18,29 @@ router.get('/ordenes', ordenesCtrl.listar);
 router.get('/ordenes/:id', ordenesCtrl.obtener);
 router.post('/ordenes', permitirRoles('admin', 'ventas'), ordenesCtrl.crear);
 router.post('/ordenes/:id/confirmar', permitirRoles('admin', 'ventas', 'inventario'), ordenesCtrl.confirmar);
+router.post(
+  '/ordenes/:id/cancelar',
+  permitirRoles('admin', 'ventas', 'inventario'),
+  ordenesCtrl.cancelar
+);
+
+router.post(
+  '/ordenes/:id/entregar',
+  permitirRoles('admin', 'ventas', 'inventario'),
+  ordenesCtrl.entregar
+);  
+
+router.post(
+  '/ordenes/:id/cancelar',
+  permitirRoles('admin', 'ventas'),
+  ordenesCtrl.cancelar
+);
+
+router.post(
+  '/ordenes/:id/entregar',
+  permitirRoles('admin', 'ventas'),
+  ordenesCtrl.entregar
+);
+
 
 module.exports = router;
