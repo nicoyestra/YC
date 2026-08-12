@@ -1,4 +1,7 @@
 const pool = require('../config/db');
+const {
+  asignarStockPendienteFIFO,
+} = require('../services/abastecimiento.service');
 
 // Genera un número correlativo tipo OV-000123 (busca el último y suma 1)
 async function generarNumero(conexion) {
@@ -16,11 +19,35 @@ async function generarNumero(conexion) {
 async function listar(req, res) {
   try {
     const { estado, cliente_id, desde, hasta } = req.query;
-    let sql = `SELECT ov.*, c.nombre AS cliente_nombre, c.es_externo, a.nombre AS almacen_nombre
-       FROM ordenes_venta ov
-       JOIN clientes c ON ov.cliente_id = c.id
-       JOIN almacenes a ON ov.almacen_id = a.id
-       WHERE 1=1`;
+    
+    let sql = `
+SELECT
+    ov.*,
+    c.nombre AS cliente_nombre,
+    c.es_externo,
+    a.nombre AS almacen_nombre,
+
+    ROUND(
+        (
+            COALESCE(SUM(d.cantidad_asignada),0) /
+            NULLIF(COALESCE(SUM(d.cantidad),0),0)
+        ) * 100
+    ) AS porcentaje_abastecimiento
+
+FROM ordenes_venta ov
+
+JOIN clientes c
+    ON ov.cliente_id = c.id
+
+JOIN almacenes a
+    ON ov.almacen_id = a.id
+
+LEFT JOIN detalle_ordenes_venta d
+    ON d.orden_venta_id = ov.id
+
+WHERE 1=1`;
+
+
     const params = [];
 
     if (estado) { sql += ' AND ov.estado = ?'; params.push(estado); }
@@ -28,7 +55,8 @@ async function listar(req, res) {
     if (desde) { sql += ' AND ov.fecha >= ?'; params.push(desde); }
     if (hasta) { sql += ' AND ov.fecha <= ?'; params.push(hasta); }
 
-    sql += ' ORDER BY ov.created_at DESC';
+sql += ' GROUP BY ov.id';
+sql += ' ORDER BY ov.created_at DESC';
 
     const [rows] = await pool.query(sql, params);
     res.json(rows);
@@ -40,20 +68,45 @@ async function listar(req, res) {
 
 async function obtener(req, res) {
   try {
-    const [ordenRows] = await pool.query('SELECT * FROM ordenes_venta WHERE id = ?', [req.params.id]);
-    if (!ordenRows[0]) return res.status(404).json({ error: 'Orden no encontrada' });
+    const [ordenRows] = await pool.query(
+      'SELECT * FROM ordenes_venta WHERE id = ?',
+      [req.params.id]
+    );
+
+    if (!ordenRows[0]) {
+      return res.status(404).json({
+        error: 'Orden no encontrada'
+      });
+    }
 
     const [detalle] = await pool.query(
-      `SELECT d.*, p.nombre AS producto_nombre, p.sku
-       FROM detalle_ordenes_venta d JOIN productos p ON d.producto_id = p.id
+      `SELECT
+          d.*,
+          p.nombre AS producto_nombre,
+          p.sku,
+          (d.cantidad - d.cantidad_asignada) AS cantidad_pendiente,
+          CASE
+            WHEN d.cantidad_asignada = 0 THEN 'sin_stock'
+            WHEN d.cantidad_asignada < d.cantidad THEN 'parcial'
+            ELSE 'completo'
+          END AS estado_abastecimiento
+       FROM detalle_ordenes_venta d
+       JOIN productos p
+         ON d.producto_id = p.id
        WHERE d.orden_venta_id = ?`,
       [req.params.id]
     );
 
-    res.json({ ...ordenRows[0], detalle });
+    res.json({
+      ...ordenRows[0],
+      detalle
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Error al obtener orden de venta' });
+
+    res.status(500).json({
+      error: 'Error al obtener orden de venta'
+    });
   }
 }
 
@@ -83,11 +136,43 @@ async function crear(req, res) {
     for (const item of items) {
       const subtotal = item.cantidad * item.precio_unitario;
       await conexion.query(
-        `INSERT INTO detalle_ordenes_venta (orden_venta_id, producto_id, cantidad, precio_unitario, subtotal)
-         VALUES (?, ?, ?, ?, ?)`,
-        [ordenId, item.producto_id, item.cantidad, item.precio_unitario, subtotal]
-      );
+  `INSERT INTO detalle_ordenes_venta
+  (
+      orden_venta_id,
+      producto_id,
+      cantidad,
+      cantidad_asignada,
+      precio_unitario,
+      subtotal
+  )
+  VALUES (?, ?, ?, 0, ?, ?)`,
+  [
+      ordenId,
+      item.producto_id,
+      item.cantidad,
+      item.precio_unitario,
+      subtotal
+  ]
+);
     }
+
+    const productosProcesados = new Set();
+
+for (const item of items) {
+  const productoId = Number(item.producto_id);
+
+  if (productosProcesados.has(productoId)) {
+    continue;
+  }
+
+  productosProcesados.add(productoId);
+
+  await asignarStockPendienteFIFO(
+    conexion,
+    productoId,
+    Number(almacen_id)
+  );
+}
 
     await conexion.commit();
     res.status(201).json({ id: ordenId, numero, total, estado: 'pendiente' });
@@ -103,8 +188,151 @@ async function crear(req, res) {
   }
 }
 
+
+
+// Edita una orden únicamente mientras se encuentre pendiente.
+// Reemplaza todos los ítems y recalcula el total.
+async function actualizar(req, res) {
+  const conexion = await pool.getConnection();
+
+  try {
+    const ordenId = req.params.id;
+    const { cliente_id, almacen_id, fecha, items } = req.body;
+
+    if (
+      !cliente_id ||
+      !almacen_id ||
+      !fecha ||
+      !Array.isArray(items) ||
+      items.length === 0
+    ) {
+      return res.status(400).json({
+        error: 'Faltan datos obligatorios o la orden no tiene ítems'
+      });
+    }
+
+    const itemInvalido = items.some(
+      (item) =>
+        !item.producto_id ||
+        Number(item.cantidad) <= 0 ||
+        Number(item.precio_unitario) < 0
+    );
+
+    if (itemInvalido) {
+      return res.status(400).json({
+        error: 'Hay productos, cantidades o precios inválidos'
+      });
+    }
+
+    await conexion.beginTransaction();
+
+    const [ordenRows] = await conexion.query(
+      'SELECT * FROM ordenes_venta WHERE id = ? FOR UPDATE',
+      [ordenId]
+    );
+
+    const orden = ordenRows[0];
+
+    if (!orden) {
+      await conexion.rollback();
+      return res.status(404).json({
+        error: 'Orden no encontrada'
+      });
+    }
+
+    if (orden.estado !== 'pendiente') {
+      await conexion.rollback();
+      return res.status(400).json({
+        error: `Solo se pueden editar órdenes pendientes. Estado actual: "${orden.estado}"`
+      });
+    }
+
+    const total = items.reduce(
+      (acumulado, item) =>
+        acumulado +
+        Number(item.cantidad) * Number(item.precio_unitario),
+      0
+    );
+
+    await conexion.query(
+  `UPDATE ordenes_venta
+   SET cliente_id=?, almacen_id=?, fecha=?, total=?
+   WHERE id=?`,
+  [cliente_id, almacen_id, fecha, total, ordenId]
+);
+
+await conexion.query(
+  'DELETE FROM detalle_ordenes_venta WHERE orden_venta_id = ?',
+  [ordenId]
+);
+
+    for (const item of items) {
+      const cantidad = Number(item.cantidad);
+      const precioUnitario = Number(item.precio_unitario);
+      const subtotal = cantidad * precioUnitario;
+
+      await conexion.query(
+`INSERT INTO detalle_ordenes_venta
+(
+    orden_venta_id,
+    producto_id,
+    cantidad,
+    cantidad_asignada,
+    precio_unitario,
+    subtotal
+)
+VALUES (?, ?, ?, 0, ?, ?)`,
+[
+    ordenId,
+    Number(item.producto_id),
+    cantidad,
+    precioUnitario,
+    subtotal
+]
+);
+    }
+
+    const productosProcesados = new Set();
+
+for (const item of items) {
+  const productoId = Number(item.producto_id);
+
+  if (productosProcesados.has(productoId)) {
+    continue;
+  }
+
+  productosProcesados.add(productoId);
+
+  await asignarStockPendienteFIFO(
+    conexion,
+    productoId,
+    Number(almacen_id)
+  );
+}
+
+    await conexion.commit();
+
+    res.json({
+      mensaje: 'Orden de venta actualizada correctamente',
+      id: Number(ordenId),
+      total,
+      estado: 'pendiente'
+    });
+  } catch (err) {
+    await conexion.rollback();
+    console.error(err);
+
+    res.status(500).json({
+      error: 'Error al actualizar la orden de venta'
+    });
+  } finally {
+    conexion.release();
+  }
+}
+
 // Confirma una orden pendiente: valida y descuenta stock, deja la orden "confirmada".
 // Pensado para que la cierre otro sector distinto de quien la cargó.
+
 async function confirmar(req, res) {
   const conexion = await pool.getConnection();
   try {
@@ -124,6 +352,21 @@ async function confirmar(req, res) {
     }
 
     const [items] = await conexion.query('SELECT * FROM detalle_ordenes_venta WHERE orden_venta_id = ?', [ordenId]);
+
+   const itemsSinAbastecer = items.filter(
+  (item) =>
+    Number(item.cantidad_asignada || 0) < Number(item.cantidad)
+);
+
+if (itemsSinAbastecer.length > 0) {
+  await conexion.rollback();
+
+  return res.status(400).json({
+    error:
+      'La orden todavía no está completamente abastecida. Hay productos pendientes de stock.'
+  });
+} 
+
 
     for (const item of items) {
       const [stockRows] = await conexion.query(
@@ -182,42 +425,82 @@ async function cancelar(req, res) {
 
     if (!orden) {
       await conexion.rollback();
-      return res.status(404).json({ error: 'Orden no encontrada' });
+
+      return res.status(404).json({
+        error: 'Orden no encontrada'
+      });
     }
 
     if (orden.estado === 'cancelada') {
       await conexion.rollback();
-      return res.status(400).json({ error: 'La orden ya está cancelada' });
+
+      return res.status(400).json({
+        error: 'La orden ya está cancelada'
+      });
     }
 
     if (orden.estado === 'entregada') {
       await conexion.rollback();
+
       return res.status(400).json({
-        error: 'Una orden entregada no puede cancelarse. Debe registrarse una devolución.'
+        error:
+          'Una orden entregada no puede cancelarse. Debe registrarse una devolución.'
       });
     }
 
     if (!['pendiente', 'confirmada'].includes(orden.estado)) {
       await conexion.rollback();
+
       return res.status(400).json({
         error: `No se puede cancelar una orden en estado "${orden.estado}"`
       });
     }
 
-    // Si la orden estaba confirmada, el stock ya había sido descontado.
-    // Por lo tanto, debe devolverse al inventario.
-    if (orden.estado === 'confirmada') {
-      const [items] = await conexion.query(
-        'SELECT * FROM detalle_ordenes_venta WHERE orden_venta_id = ?',
-        [ordenId]
-      );
+    // Guardamos los productos afectados antes de cancelar.
+    const [items] = await conexion.query(
+      `SELECT *
+       FROM detalle_ordenes_venta
+       WHERE orden_venta_id = ?`,
+      [ordenId]
+    );
 
+    /*
+     * IMPORTANTE:
+     * Primero cambiamos la orden a cancelada.
+     *
+     * De esta forma FIFO deja de considerar las cantidades
+     * asignadas a esta orden como stock comprometido.
+     */
+    await conexion.query(
+      `UPDATE ordenes_venta
+       SET estado = 'cancelada'
+       WHERE id = ?`,
+      [ordenId]
+    );
+
+    /*
+     * Si estaba CONFIRMADA, el stock físico ya había sido
+     * descontado al confirmar la venta.
+     *
+     * Por eso ahora debemos devolverlo al almacén.
+     */
+    if (orden.estado === 'confirmada') {
       for (const item of items) {
         await conexion.query(
-          `INSERT INTO stock (producto_id, almacen_id, cantidad)
+          `INSERT INTO stock
+           (
+             producto_id,
+             almacen_id,
+             cantidad
+           )
            VALUES (?, ?, ?)
-           ON DUPLICATE KEY UPDATE cantidad = cantidad + VALUES(cantidad)`,
-          [item.producto_id, orden.almacen_id, item.cantidad]
+           ON DUPLICATE KEY UPDATE
+             cantidad = cantidad + VALUES(cantidad)`,
+          [
+            item.producto_id,
+            orden.almacen_id,
+            item.cantidad
+          ]
         );
 
         await conexion.query(
@@ -232,7 +515,16 @@ async function cancelar(req, res) {
              referencia_id,
              usuario_id
            )
-           VALUES (?, ?, 'entrada', ?, ?, 'venta', ?, ?)`,
+           VALUES (
+             ?,
+             ?,
+             'entrada',
+             ?,
+             ?,
+             'venta',
+             ?,
+             ?
+           )`,
           [
             item.producto_id,
             orden.almacen_id,
@@ -245,29 +537,57 @@ async function cancelar(req, res) {
       }
     }
 
-    await conexion.query(
-      "UPDATE ordenes_venta SET estado = 'cancelada' WHERE id = ?",
-      [ordenId]
-    );
+    /*
+     * Ahora redistribuimos el stock disponible.
+     *
+     * Esto sirve en los DOS casos:
+     *
+     * PENDIENTE:
+     * libera las cantidades que tenía reservadas.
+     *
+     * CONFIRMADA:
+     * reasigna el stock físico que acabamos de devolver.
+     */
+    const productosProcesados = new Set();
+
+    for (const item of items) {
+      const productoId = Number(item.producto_id);
+
+      if (productosProcesados.has(productoId)) {
+        continue;
+      }
+
+      productosProcesados.add(productoId);
+
+      await asignarStockPendienteFIFO(
+        conexion,
+        productoId,
+        Number(orden.almacen_id)
+      );
+    }
 
     await conexion.commit();
 
     res.json({
       mensaje:
         orden.estado === 'confirmada'
-          ? 'Orden cancelada y stock devuelto correctamente'
-          : 'Orden pendiente cancelada correctamente',
+          ? 'Orden cancelada, stock devuelto y reasignado correctamente'
+          : 'Orden pendiente cancelada y stock liberado correctamente',
       estado: 'cancelada'
     });
+
   } catch (err) {
     await conexion.rollback();
+
     console.error(err);
-    res.status(500).json({ error: 'Error al cancelar la orden de venta' });
+
+    res.status(500).json({
+      error: 'Error al cancelar la orden de venta'
+    });
   } finally {
     conexion.release();
   }
 }
-
 
 // Marca como entregada una orden previamente confirmada.
 // No vuelve a modificar el stock porque ya fue descontado al confirmar.
@@ -318,11 +638,11 @@ async function entregar(req, res) {
   }
 }
 
-
 module.exports = {
   listar,
   obtener,
   crear,
+  actualizar,
   confirmar,
   cancelar,
   entregar

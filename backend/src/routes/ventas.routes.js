@@ -17,6 +17,11 @@ router.delete('/clientes/:id', permitirRoles('admin', 'ventas'), clientesCtrl.el
 router.get('/ordenes', ordenesCtrl.listar);
 router.get('/ordenes/:id', ordenesCtrl.obtener);
 router.post('/ordenes', permitirRoles('admin', 'ventas'), ordenesCtrl.crear);
+router.put(
+  '/ordenes/:id',
+  permitirRoles('admin', 'ventas'),
+  ordenesCtrl.actualizar
+);
 router.post('/ordenes/:id/confirmar', permitirRoles('admin', 'ventas', 'inventario'), ordenesCtrl.confirmar);
 router.post(
   '/ordenes/:id/cancelar',

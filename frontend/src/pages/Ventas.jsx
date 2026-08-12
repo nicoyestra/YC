@@ -23,6 +23,8 @@ export default function Ventas() {
   const [ordenExpandida, setOrdenExpandida] = useState(null);
   const [detalleOrden, setDetalleOrden] = useState(null);
   const [error, setError] = useState('');
+  const [ordenEditandoId, setOrdenEditandoId] = useState(null);
+const [disponibilidades, setDisponibilidades] = useState({});
 
   const [nuevaOrden, setNuevaOrden] = useState({
     cliente_id: '',
@@ -72,28 +74,35 @@ export default function Ventas() {
     });
   }
 
-  function seleccionarProductoItem(index, producto) {
-    const items = [...nuevaOrden.items];
+function seleccionarProductoItem(index, producto) {
+  const items = [...nuevaOrden.items];
 
-    if (!producto) {
-      items[index] = {
-        ...items[index],
-        producto_id: '',
-        precio_unitario: '',
-      };
-    } else {
-      items[index] = {
-        ...items[index],
-        producto_id: producto.id,
-        precio_unitario: producto.precio_venta,
-      };
+  if (!producto) {
+    items[index] = {
+      ...items[index],
+      producto_id: '',
+      precio_unitario: '',
+    };
+  } else {
+    items[index] = {
+      ...items[index],
+      producto_id: producto.id,
+      precio_unitario: producto.precio_venta,
+    };
+
+    if (nuevaOrden.almacen_id) {
+      consultarDisponibilidad(
+        producto.id,
+        nuevaOrden.almacen_id
+      );
     }
-
-    setNuevaOrden({
-      ...nuevaOrden,
-      items,
-    });
   }
+
+  setNuevaOrden({
+    ...nuevaOrden,
+    items,
+  });
+}
 
   function agregarItem() {
     setNuevaOrden({
@@ -111,13 +120,68 @@ export default function Ventas() {
     });
   }
 
-  function stockDisponible(productoId) {
-    const producto = productos.find(
-      (p) => p.id === Number(productoId)
+function claveDisponibilidad(productoId, almacenId) {
+  return `${productoId}-${almacenId}`;
+}
+
+async function consultarDisponibilidad(
+  productoId,
+  almacenId
+) {
+  if (!productoId || !almacenId) {
+    return null;
+  }
+
+  try {
+    const { data } = await api.get(
+      '/inventario/disponibilidad-ventas',
+      {
+        params: {
+          producto_id: Number(productoId),
+          almacen_id: Number(almacenId),
+          ...(ordenEditandoId
+            ? { orden_id: Number(ordenEditandoId) }
+            : {}),
+        },
+      }
     );
 
-    return producto ? Number(producto.stock_total || 0) : null;
+    const clave = claveDisponibilidad(
+      productoId,
+      almacenId
+    );
+
+    setDisponibilidades((actual) => ({
+      ...actual,
+      [clave]: data,
+    }));
+
+    return data;
+  } catch (err) {
+    console.error(
+      'Error consultando disponibilidad:',
+      err
+    );
+
+    return null;
   }
+}
+
+function obtenerDisponibilidad(productoId) {
+  if (
+    !productoId ||
+    !nuevaOrden.almacen_id
+  ) {
+    return null;
+  }
+
+  const clave = claveDisponibilidad(
+    productoId,
+    nuevaOrden.almacen_id
+  );
+
+  return disponibilidades[clave] || null;
+}
 
   const totalOrden = nuevaOrden.items.reduce(
     (acumulado, item) =>
@@ -127,9 +191,45 @@ export default function Ventas() {
     0
   );
 
+async function editarOrden(orden) {
+  setError('');
+
+  try {
+    const { data } = await api.get(`/ventas/ordenes/${orden.id}`);
+
+    setOrdenEditandoId(orden.id);
+
+    setNuevaOrden({
+      cliente_id: String(data.cliente_id),
+      almacen_id: String(data.almacen_id),
+      fecha: String(data.fecha).slice(0, 10),
+      items: data.detalle.map((item) => ({
+        producto_id: item.producto_id,
+        cantidad: item.cantidad,
+        precio_unitario: item.precio_unitario,
+      })),
+    });
+
+    setMostrarFormOrden(true);
+
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth',
+    });
+  } catch (err) {
+    setError(
+      err.response?.data?.error ||
+        'No se pudo cargar la orden para editar'
+    );
+  }
+}
+
   async function crearOrden(e) {
     e.preventDefault();
     setError('');
+
+  
+    const estabaEditando = Boolean(ordenEditandoId);
 
     const itemInvalido = nuevaOrden.items.some(
       (item) =>
@@ -144,43 +244,65 @@ export default function Ventas() {
       );
       return;
     }
+try {
+  const payload = {
+    ...nuevaOrden,
+    cliente_id: Number(nuevaOrden.cliente_id),
+    almacen_id: Number(nuevaOrden.almacen_id),
+    items: nuevaOrden.items.map((item) => ({
+      producto_id: Number(item.producto_id),
+      cantidad: Number(item.cantidad),
+      precio_unitario: Number(item.precio_unitario),
+    })),
+  };
 
-    try {
-      const payload = {
-        ...nuevaOrden,
-        cliente_id: Number(nuevaOrden.cliente_id),
-        almacen_id: Number(nuevaOrden.almacen_id),
-        items: nuevaOrden.items.map((item) => ({
-          producto_id: Number(item.producto_id),
-          cantidad: Number(item.cantidad),
-          precio_unitario: Number(item.precio_unitario),
-        })),
-      };
+  let data;
 
-      const { data } = await api.post('/ventas/ordenes', payload);
+  if (ordenEditandoId) {
+    const respuesta = await api.put(
+      `/ventas/ordenes/${ordenEditandoId}`,
+      payload
+    );
 
-      setMostrarFormOrden(false);
+    data = respuesta.data;
+  } else {
+    const respuesta = await api.post(
+      '/ventas/ordenes',
+      payload
+    );
 
-      setNuevaOrden({
-        cliente_id: '',
-        almacen_id: '',
-        fecha: hoy(),
-        items: [{ ...ITEM_VACIO }],
-      });
-
-      await cargar(filtroEstado);
-
-      alert(
-        `Orden de venta creada con el número automático ${data.numero}`
-      );
-    } catch (err) {
-      setError(
-        err.response?.data?.error ||
-          'Error al crear la orden de venta'
-      );
-    }
+    data = respuesta.data;
   }
 
+  setMostrarFormOrden(false);
+  setOrdenEditandoId(null);
+
+  setNuevaOrden({
+    cliente_id: '',
+    almacen_id: '',
+    fecha: hoy(),
+    items: [{ ...ITEM_VACIO }],
+  });
+
+  await cargar(filtroEstado);
+
+  if (estabaEditando) {
+    alert('Orden de venta actualizada correctamente');
+  } else {
+    alert(
+      `Orden de venta creada con el número automático ${data.numero}`
+    );
+  }
+} catch (err) {
+  setError(
+    err.response?.data?.error ||
+      (estabaEditando
+        ? 'Error al actualizar la orden de venta'
+        : 'Error al crear la orden de venta')
+  );
+}}
+
+  
   async function confirmarOrden(id) {
     setError('');
 
@@ -257,6 +379,68 @@ async function entregarOrden(id) {
     cargar(estado);
   }
 
+function obtenerEstadoAbastecimiento(orden) {
+  const porcentaje = Number(orden.porcentaje_abastecimiento || 0);
+
+  if (orden.estado === 'cancelada') {
+    return {
+      texto: 'Cancelada',
+      color: '#64748b',
+      fondo: '#f1f5f9',
+    };
+  }
+
+  if (orden.estado === 'confirmada' || orden.estado === 'entregada') {
+    return {
+      texto: 'Completo',
+      color: '#15803d',
+      fondo: '#dcfce7',
+    };
+  }
+
+  if (porcentaje >= 100) {
+    return {
+      texto: 'Completo',
+      color: '#15803d',
+      fondo: '#dcfce7',
+    };
+  }
+
+  if (porcentaje > 0) {
+    return {
+      texto: 'Parcial',
+      color: '#a16207',
+      fondo: '#fef9c3',
+    };
+  }
+
+  return {
+    texto: 'Sin stock',
+    color: '#b91c1c',
+    fondo: '#fee2e2',
+  };
+}
+
+// Actualiza la disponibilidad cuando cambia el almacén
+// o cuando estamos editando otra orden.
+useEffect(() => {
+  if (!nuevaOrden.almacen_id) {
+    return;
+  }
+
+  nuevaOrden.items.forEach((item) => {
+    if (item.producto_id) {
+      consultarDisponibilidad(
+        item.producto_id,
+        nuevaOrden.almacen_id
+      );
+    }
+  });
+}, [
+  nuevaOrden.almacen_id,
+  ordenEditandoId
+]);
+
   return (
     <div>
       <div
@@ -273,9 +457,17 @@ async function entregarOrden(id) {
           type="button"
           className="boton"
           onClick={() => {
-            setMostrarFormOrden(!mostrarFormOrden);
-            setError('');
-          }}
+  setMostrarFormOrden(!mostrarFormOrden);
+  setOrdenEditandoId(null);
+  setError('');
+
+  setNuevaOrden({
+    cliente_id: '',
+    almacen_id: '',
+    fecha: hoy(),
+    items: [{ ...ITEM_VACIO }],
+  });
+}}
         >
           {mostrarFormOrden
             ? 'Cancelar'
@@ -405,14 +597,16 @@ async function entregarOrden(id) {
 
           <h4>Ítems</h4>
 
-          {nuevaOrden.items.map((item, i) => {
-            const disponible = stockDisponible(
-              item.producto_id
-            );
+                {nuevaOrden.items.map((item, i) => {
+  const disponibilidad =
+    obtenerDisponibilidad(item.producto_id);
 
-            const excede =
-              disponible !== null &&
-              Number(item.cantidad) > disponible;
+  const disponible =
+    disponibilidad?.disponible ?? null;
+
+  const excede =
+    disponible !== null &&
+    Number(item.cantidad) > disponible;
 
             return (
               <div
@@ -448,21 +642,43 @@ async function entregarOrden(id) {
                       placeholder="Escribí nombre, SKU o código de barras..."
                     />
 
-                    {disponible !== null && (
-                      <div
-                        style={{
-                          marginTop: 7,
-                          color:
-                            disponible > 0
-                              ? '#64748b'
-                              : '#dc2626',
-                          fontSize: 12,
-                        }}
-                      >
-                        Stock disponible:{' '}
-                        <strong>{disponible}</strong>
-                      </div>
-                    )}
+                    {disponibilidad && (
+  <div
+    style={{
+      marginTop: 8,
+      fontSize: 12,
+      lineHeight: 1.7,
+    }}
+  >
+    <div style={{ color: '#64748b' }}>
+      Stock físico:{' '}
+      <strong>
+        {disponibilidad.stock_fisico}
+      </strong>
+    </div>
+
+    <div style={{ color: '#64748b' }}>
+      Reservado:{' '}
+      <strong>
+        {disponibilidad.reservado}
+      </strong>
+    </div>
+
+    <div
+      style={{
+        color:
+          disponibilidad.disponible > 0
+            ? '#15803d'
+            : '#dc2626',
+        fontWeight: 700,
+      }}
+    >
+      Disponible para esta venta:{' '}
+      {disponibilidad.disponible}
+    </div>
+  </div>
+)}
+
                   </div>
 
                   <div
@@ -574,7 +790,9 @@ async function entregarOrden(id) {
               marginTop: 10,
             }}
           >
-            Guardar orden de venta
+         {ordenEditandoId
+  ? 'Guardar cambios'
+  : 'Guardar orden de venta'}
           </button>
         </form>
       )}
@@ -625,20 +843,21 @@ async function entregarOrden(id) {
 
         <table>
           <thead>
-            <tr>
-              <th>Número</th>
-              <th>Cliente</th>
-              <th>Estado</th>
-              <th>Total</th>
-              <th>Acciones</th>
-            </tr>
+          <tr>
+  <th>Número</th>
+  <th>Cliente</th>
+  <th>Estado</th>
+  <th>Abastecimiento</th>
+  <th>Total</th>
+  <th>Acciones</th>
+</tr>
           </thead>
 
           <tbody>
             {ordenes.length === 0 && (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   style={{
                     textAlign: 'center',
                     padding: 30,
@@ -664,9 +883,77 @@ async function entregarOrden(id) {
 
                   <td>{orden.estado}</td>
 
-                  <td>
-                    ${Number(orden.total || 0).toFixed(2)}
-                  </td>
+<td>
+  {(() => {
+    const abastecimiento = obtenerEstadoAbastecimiento(orden);
+    const porcentaje = Math.min(
+      100,
+      Math.max(0, Number(orden.porcentaje_abastecimiento || 0))
+    );
+
+    return (
+      <div style={{ minWidth: 130 }}>
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '4px 9px',
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+            color: abastecimiento.color,
+            background: abastecimiento.fondo,
+            marginBottom: 6,
+          }}
+        >
+          {abastecimiento.texto}
+        </div>
+
+        {orden.estado === 'pendiente' && (
+          <>
+            <div
+              style={{
+                width: '100%',
+                height: 6,
+                background: '#e2e8f0',
+                borderRadius: 999,
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  width: `${porcentaje}%`,
+                  height: '100%',
+                  background:
+                    porcentaje >= 100
+                      ? '#22c55e'
+                      : porcentaje > 0
+                        ? '#eab308'
+                        : '#ef4444',
+                  transition: 'width .25s ease',
+                }}
+              />
+            </div>
+
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 11,
+                color: '#64748b',
+              }}
+            >
+              {porcentaje}% asignado
+            </div>
+          </>
+        )}
+      </div>
+    );
+  })()}
+</td>
+
+<td>
+  ${Number(orden.total || 0).toFixed(2)}
+</td>
 
                   <td
                     style={{
@@ -692,18 +979,44 @@ async function entregarOrden(id) {
   <>
     <button
       type="button"
-      className="boton"
-      onClick={() => confirmarOrden(orden.id)}
+      className="boton boton-secundario"
+      onClick={() => editarOrden(orden)}
     >
-      Confirmar
+      Editar
     </button>
+
+   <button
+  type="button"
+  className="boton"
+  disabled={Number(orden.porcentaje_abastecimiento || 0) < 100}
+  title={
+    Number(orden.porcentaje_abastecimiento || 0) < 100
+      ? 'La orden todavía tiene productos pendientes de abastecimiento'
+      : 'Confirmar orden'
+  }
+  onClick={() => confirmarOrden(orden.id)}
+  style={{
+    opacity:
+      Number(orden.porcentaje_abastecimiento || 0) < 100
+        ? 0.45
+        : 1,
+    cursor:
+      Number(orden.porcentaje_abastecimiento || 0) < 100
+        ? 'not-allowed'
+        : 'pointer',
+  }}
+>
+  {Number(orden.porcentaje_abastecimiento || 0) < 100
+    ? 'Esperando stock'
+    : 'Confirmar'}
+</button>
 
     <button
       type="button"
       className="boton boton-secundario"
       style={{
-        background: "#dc2626",
-        color: "#fff"
+        background: '#dc2626',
+        color: '#fff',
       }}
       onClick={() => cancelarOrden(orden.id)}
     >
