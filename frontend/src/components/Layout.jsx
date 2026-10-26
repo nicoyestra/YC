@@ -25,8 +25,8 @@ const ICONOS = {
 
 const MODULOS = [
   { path: '/', label: 'Inicio', roles: null },
-  { path: '/articulos', label: 'Artículos', roles: ['admin', 'inventario', 'compras'] },
-  { path: '/inventario', label: 'Inventario', roles: ['admin', 'inventario'] },
+  { path: '/articulos', label: 'Artículos', roles: ['admin', 'ventas', 'inventario', 'compras'] },
+  { path: '/inventario', label: 'Inventario', roles: ['admin', 'ventas', 'inventario'] },
   { path: '/compras', label: 'Compras', roles: ['admin', 'compras'] },
   { path: '/ventas', label: 'Ventas', roles: ['admin', 'ventas'] },
   { path: '/devoluciones', label: 'Devoluciones', roles: ['admin', 'ventas'] },

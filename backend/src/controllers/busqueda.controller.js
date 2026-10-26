@@ -1,8 +1,9 @@
-const db = require('../config/db');
-
 async function buscarGlobal(req, res) {
   try {
-    const termino = String(req.query.q || '').trim();
+    const db = req.db;
+
+    const termino =
+      String(req.query.q || '').trim();
 
     if (termino.length < 2) {
       return res.json({
@@ -10,7 +11,7 @@ async function buscarGlobal(req, res) {
         clientes: [],
         ventas: [],
         compras: [],
-        facturas: [],
+        facturas: []
       });
     }
 
@@ -21,7 +22,7 @@ async function buscarGlobal(req, res) {
       [clientes],
       [ventas],
       [compras],
-      [facturas],
+      [facturas]
     ] = await Promise.all([
       db.query(
         `
@@ -34,7 +35,8 @@ async function buscarGlobal(req, res) {
           p.precio_venta,
           COALESCE(SUM(s.cantidad), 0) AS stock_total
         FROM productos p
-        LEFT JOIN stock s ON s.producto_id = p.id
+        LEFT JOIN stock s
+          ON s.producto_id = p.id
         WHERE p.activo = 1
           AND (
             p.nombre LIKE ?
@@ -52,7 +54,12 @@ async function buscarGlobal(req, res) {
         ORDER BY p.nombre
         LIMIT 8
         `,
-        [texto, texto, texto, texto]
+        [
+          texto,
+          texto,
+          texto,
+          texto
+        ]
       ),
 
       db.query(
@@ -74,7 +81,12 @@ async function buscarGlobal(req, res) {
         ORDER BY nombre
         LIMIT 8
         `,
-        [texto, texto, texto, texto]
+        [
+          texto,
+          texto,
+          texto,
+          texto
+        ]
       ),
 
       db.query(
@@ -87,7 +99,8 @@ async function buscarGlobal(req, res) {
           ov.total,
           c.nombre AS cliente_nombre
         FROM ordenes_venta ov
-        INNER JOIN clientes c ON c.id = ov.cliente_id
+        INNER JOIN clientes c
+          ON c.id = ov.cliente_id
         WHERE
           ov.numero LIKE ?
           OR c.nombre LIKE ?
@@ -95,7 +108,11 @@ async function buscarGlobal(req, res) {
         ORDER BY ov.created_at DESC
         LIMIT 8
         `,
-        [texto, texto, texto]
+        [
+          texto,
+          texto,
+          texto
+        ]
       ),
 
       db.query(
@@ -108,7 +125,8 @@ async function buscarGlobal(req, res) {
           oc.total,
           p.nombre AS proveedor_nombre
         FROM ordenes_compra oc
-        INNER JOIN proveedores p ON p.id = oc.proveedor_id
+        INNER JOIN proveedores p
+          ON p.id = oc.proveedor_id
         WHERE
           oc.numero LIKE ?
           OR p.nombre LIKE ?
@@ -116,7 +134,11 @@ async function buscarGlobal(req, res) {
         ORDER BY oc.created_at DESC
         LIMIT 8
         `,
-        [texto, texto, texto]
+        [
+          texto,
+          texto,
+          texto
+        ]
       ),
 
       db.query(
@@ -129,7 +151,8 @@ async function buscarGlobal(req, res) {
           f.total,
           c.nombre AS cliente_nombre
         FROM facturas f
-        INNER JOIN clientes c ON c.id = f.cliente_id
+        INNER JOIN clientes c
+          ON c.id = f.cliente_id
         WHERE
           f.numero LIKE ?
           OR c.nombre LIKE ?
@@ -137,8 +160,12 @@ async function buscarGlobal(req, res) {
         ORDER BY f.created_at DESC
         LIMIT 8
         `,
-        [texto, texto, texto]
-      ),
+        [
+          texto,
+          texto,
+          texto
+        ]
+      )
     ]);
 
     return res.json({
@@ -146,17 +173,23 @@ async function buscarGlobal(req, res) {
       clientes,
       ventas,
       compras,
-      facturas,
+      facturas
     });
+
   } catch (error) {
-    console.error('Error en búsqueda global:', error);
+    console.error(
+      'Error en búsqueda global:',
+      error
+    );
 
     return res.status(500).json({
-      error: 'No se pudo realizar la búsqueda global',
+      error:
+        'No se pudo realizar la búsqueda global'
     });
   }
 }
 
+
 module.exports = {
-  buscarGlobal,
+  buscarGlobal
 };

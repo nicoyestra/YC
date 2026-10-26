@@ -46,7 +46,13 @@ export default function Usuarios() {
     }
   }
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => {
+    cargar();
+    const intervalo = window.setInterval(() => {
+      api.get('/usuarios').then(({ data }) => setUsuarios(data)).catch(() => {});
+    }, 15000);
+    return () => window.clearInterval(intervalo);
+  }, []);
 
   function limpiarAvisos() {
     setError('');
@@ -121,6 +127,23 @@ export default function Usuarios() {
     limpiarAvisos();
     setPasswordUsuario(u);
     setNuevaPassword('');
+  }
+
+  async function eliminarUsuario(u) {
+    limpiarAvisos();
+    const confirmado = window.confirm(
+      `¿Eliminar definitivamente al usuario "${u.nombre_usuario}"?\n\n` +
+      'Si tiene movimientos históricos asociados, el sistema impedirá la eliminación para proteger los registros. No se puede deshacer.'
+    );
+    if (!confirmado) return;
+
+    try {
+      const { data } = await api.delete(`/usuarios/${u.id}`);
+      setMensaje(data.mensaje || 'Usuario eliminado correctamente');
+      await cargar();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo eliminar el usuario');
+    }
   }
 
   async function guardarPassword(e) {
@@ -211,7 +234,7 @@ export default function Usuarios() {
         {cargando ? <p>Cargando usuarios...</p> : (
           <table>
             <thead>
-              <tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Empleado</th><th>Estado</th><th>Último ingreso</th><th>Acciones</th></tr>
+              <tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Empleado</th><th>Estado</th><th>Conexión</th><th>Último ingreso</th><th>Acciones</th></tr>
             </thead>
             <tbody>
               {usuarios.map((u) => (
@@ -221,6 +244,7 @@ export default function Usuarios() {
                   <td>{u.rol}</td>
                   <td>{u.empleado || '—'}</td>
                   <td><span className={`badge ${u.activo ? 'badge-activo' : ''}`}>{u.activo ? 'Activo' : 'Inactivo'}</span></td>
+                  <td><span className={`badge ${u.en_linea ? 'badge-activo' : ''}`} style={!u.en_linea ? { background: '#e5e7eb', color: '#4b5563' } : {}}>{u.en_linea ? 'En línea' : 'Desconectado'}</span></td>
                   <td>{fecha(u.ultimo_login)}</td>
                   <td>
                     <div className="acciones-tabla">
@@ -229,11 +253,20 @@ export default function Usuarios() {
                       <button className="boton boton-secundario boton-chico" disabled={u.id === usuarioActual?.id && Boolean(u.activo)} onClick={() => alternarEstado(u)}>
                         {u.activo ? 'Desactivar' : 'Activar'}
                       </button>
+                      <button
+                        type="button"
+                        className="boton boton-secundario boton-chico"
+                        disabled={u.id === usuarioActual?.id}
+                        onClick={() => eliminarUsuario(u)}
+                        title={u.id === usuarioActual?.id ? 'No podés eliminar tu propio usuario' : 'Eliminar usuario'}
+                      >
+                        Eliminar
+                      </button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {!usuarios.length && <tr><td colSpan="7">No hay usuarios registrados.</td></tr>}
+              {!usuarios.length && <tr><td colSpan="8">No hay usuarios registrados.</td></tr>}
             </tbody>
           </table>
         )}

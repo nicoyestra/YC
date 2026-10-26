@@ -28,21 +28,24 @@ export default function Inicio() {
   const { usuario } = useAuth();
   const navigate = useNavigate();
   const rol = usuario?.rol || '';
-  const puede = (modulo) => permisos[modulo]?.includes(rol);
+  const puede = (modulo) => (modulo === 'articulos' || modulo === 'inventario') && rol === 'ventas' ? true : permisos[modulo]?.includes(rol);
+  const esAdmin = rol === 'admin';
 
   useEffect(() => {
+    if (!esAdmin) { setData({ kpis: {}, ventas30Dias: [], topProductos: [], actividadReciente: [] }); setCargando(false); return; }
     api.get('/dashboard/resumen').then(r => setData(r.data)).catch(e => setError(e.response?.data?.error || 'No se pudo cargar el dashboard')).finally(() => setCargando(false));
-  }, []);
+  }, [esAdmin]);
 
   const k = data?.kpis || {};
   const tarjetas = [
-    { modulo:'ventas', ruta:'/ventas', etiqueta:'Ventas de hoy', valor:dinero(k.ventasHoy?.total), detalle:`${k.ventasHoy?.cantidad || 0} comprobantes`, clase:'kpi-blue', icono:'↑' },
-    { modulo:'ventas', ruta:'/ventas', etiqueta:'Ventas del mes', valor:dinero(k.ventasMes?.total), detalle:`${k.ventasMes?.cantidad || 0} comprobantes`, clase:'kpi-indigo', icono:'▥' },
+    { modulo:'ventas', ruta:'/ventas', etiqueta:'Ventas de hoy', valor:dinero(k.ventasHoy?.total), detalle:`${k.ventasHoy?.cantidad || 0} órdenes confirmadas`, clase:'kpi-blue', icono:'↑' },
+    { modulo:'ventas', ruta:'/ventas', etiqueta:'Ventas del mes', valor:dinero(k.ventasMes?.total), detalle:`${k.ventasMes?.cantidad || 0} órdenes confirmadas`, clase:'kpi-indigo', icono:'▥' },
+    { modulo:'ventas', ruta:'/ventas', etiqueta:'Órdenes pendientes', valor:k.ordenesPendientes?.cantidad || 0, detalle:dinero(k.ordenesPendientes?.total), clase:'kpi-cyan', icono:'◷' },
     { modulo:'facturacion', ruta:'/facturacion', etiqueta:'Por cobrar', valor:dinero(k.facturasPendientes?.total), detalle:`${k.facturasPendientes?.cantidad || 0} facturas`, clase:'kpi-orange', icono:'$' },
     { modulo:'inventario', ruta:'/inventario', etiqueta:'Stock bajo', valor:k.stockBajo?.cantidad || 0, detalle:`de ${k.productos?.cantidad || 0} artículos`, clase:'kpi-red', icono:'△' },
     { modulo:'compras', ruta:'/compras', etiqueta:'Compras pendientes', valor:k.comprasPendientes?.cantidad || 0, detalle:dinero(k.comprasPendientes?.total), clase:'kpi-cyan', icono:'↓' },
     { modulo:'clientes', ruta:'/clientes', etiqueta:'Clientes activos', valor:k.clientes?.cantidad || 0, detalle:'base comercial', clase:'kpi-slate', icono:'♙' },
-  ].filter(x => puede(x.modulo));
+  ].filter(x => esAdmin && puede(x.modulo));
 
   const accesos = [
     { modulo:'ventas', ruta:'/ventas', titulo:'Nueva venta', detalle:'Registrar operación', icono:'↑' },
@@ -50,10 +53,20 @@ export default function Inicio() {
     { modulo:'articulos', ruta:'/articulos', titulo:'Nuevo artículo', detalle:'Administrar catálogo', icono:'▦' },
     { modulo:'clientes', ruta:'/clientes', titulo:'Nuevo cliente', detalle:'Gestionar contactos', icono:'♙' },
     { modulo:'rrhh', ruta:'/rrhh', titulo:'Nuevo empleado', detalle:'Gestionar RRHH', icono:'♧' },
-  ].filter(x => puede(x.modulo));
+  ].filter(x => esAdmin && puede(x.modulo));
 
   if (cargando) return <div className="dashboard-loading"><span /><p>Cargando centro de control…</p></div>;
   if (error) return <div className="tarjeta error">{error}</div>;
+  if (!esAdmin) return (
+    <div className="dashboard-v15">
+      <section className="control-hero"><div><span className="eyebrow">PANEL OPERATIVO</span><h1>Buen día, {usuario?.nombre_usuario || 'Equipo de ventas'} 👋</h1><p>Podés consultar artículos, revisar existencias y preparar presupuestos. Las estadísticas comerciales están reservadas al administrador.</p></div><div className="live-pill"><i /> En línea</div></section>
+      <section className="dashboard-main-grid">
+        <aside className="tarjeta dashboard-widget quick-widget"><div className="widget-heading"><div><span className="eyebrow">ACCESOS RÁPIDOS</span><h3>Trabajo diario</h3></div></div><div className="quick-list">
+          {[{ruta:'/articulos',titulo:'Consultar artículos',detalle:'Buscar productos y precios',icono:'▦'},{ruta:'/inventario',titulo:'Consultar inventario',detalle:'Ver existencias reales',icono:'◫'},{ruta:'/ventas',titulo:'Ventas y presupuestos',detalle:'Preparar una operación',icono:'↑'},{ruta:'/clientes',titulo:'Clientes',detalle:'Consultar y gestionar clientes',icono:'♙'}].map(a => <button key={a.ruta} className="quick-access-button" onClick={() => navigate(a.ruta)}><span>{a.icono}</span><div><strong>{a.titulo}</strong><small>{a.detalle}</small></div><b>›</b></button>)}
+        </div></aside>
+      </section>
+    </div>
+  );
 
   return (
     <div className="dashboard-v15">
@@ -69,7 +82,7 @@ export default function Inicio() {
       <section className="dashboard-main-grid">
         {(rol === 'admin' || rol === 'ventas') && (
           <article className="tarjeta dashboard-widget chart-widget">
-            <div className="widget-heading"><div><span className="eyebrow">RENDIMIENTO</span><h3>Ventas de los últimos 30 días</h3></div><button onClick={() => navigate('/estadisticas')}>Ver estadísticas →</button></div>
+            <div className="widget-heading"><div><span className="eyebrow">RENDIMIENTO</span><h3>Ventas confirmadas de los últimos 30 días</h3></div><button onClick={() => navigate('/estadisticas')}>Ver estadísticas →</button></div>
             <MiniGrafico datos={data?.ventas30Dias} />
             <div className="chart-labels"><span>Hace 30 días</span><strong>{dinero(k.ventasMes?.total)}</strong><span>Hoy</span></div>
           </article>

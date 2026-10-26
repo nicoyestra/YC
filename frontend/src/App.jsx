@@ -18,6 +18,8 @@ import Estadisticas from './pages/Estadisticas';
 import RRHH from './pages/RRHH';
 import Usuarios from './pages/Usuarios';
 import Presupuestos from './pages/Presupuestos';
+import MasterLogin from './pages/MasterLogin';
+import MasterDashboard from './pages/MasterDashboard';
 
 export default function App() {
   return (
@@ -25,6 +27,8 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/master/login" element={<MasterLogin />} />
+          <Route path="/master" element={<MasterDashboard />} />
           <Route
             path="/"
             element={

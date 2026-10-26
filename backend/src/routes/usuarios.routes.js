@@ -11,5 +11,6 @@ router.post('/', ctrl.crear);
 router.put('/:id', ctrl.actualizar);
 router.patch('/:id/estado', ctrl.cambiarEstado);
 router.patch('/:id/password', ctrl.cambiarPassword);
+router.delete('/:id', ctrl.eliminar);
 
 module.exports = router;

@@ -1,5 +1,3 @@
-const pool = require('../config/db');
-
 const {
   asignarStockPendienteFIFO,
 } = require('../services/abastecimiento.service');
@@ -7,7 +5,8 @@ const {
 
 // Registra un movimiento (entrada/salida/ajuste) y actualiza la tabla de stock
 async function registrarMovimiento(req, res) {
-  const conexion = await pool.getConnection();
+  const db = req.db;
+  const conexion = await db.getConnection();
 
   try {
     const {
@@ -145,9 +144,9 @@ async function registrarMovimiento(req, res) {
 }
 
 
-
 async function transferirStock(req, res) {
-  const conexion = await pool.getConnection();
+  const db = req.db;
+  const conexion = await db.getConnection();
 
   try {
     const {
@@ -324,8 +323,11 @@ async function transferirStock(req, res) {
   }
 }
 
+
 async function historial(req, res) {
   try {
+    const db = req.db;
+
     const { producto_id, almacen_id } = req.query;
 
     let sql = `
@@ -355,7 +357,7 @@ async function historial(req, res) {
 
     sql += ' ORDER BY m.created_at DESC LIMIT 200';
 
-    const [rows] = await pool.query(sql, params);
+    const [rows] = await db.query(sql, params);
 
     res.json(rows);
 
@@ -371,7 +373,9 @@ async function historial(req, res) {
 
 async function listarAlmacenes(req, res) {
   try {
-    const [rows] = await pool.query(
+    const db = req.db;
+
+    const [rows] = await db.query(
       'SELECT * FROM almacenes ORDER BY nombre'
     );
 
@@ -390,7 +394,9 @@ async function listarAlmacenes(req, res) {
 // Lista el inventario marcado como no utilizable
 async function listarDanado(req, res) {
   try {
-    const [rows] = await pool.query(
+    const db = req.db;
+
+    const [rows] = await db.query(
       `SELECT
          sd.*,
          p.sku,
@@ -419,7 +425,8 @@ async function listarDanado(req, res) {
 
 // Mueve stock utilizable a stock dañado/no utilizable
 async function moverADanado(req, res) {
-  const conexion = await pool.getConnection();
+  const db = req.db;
+  const conexion = await db.getConnection();
 
   try {
     const {
@@ -533,9 +540,12 @@ async function moverADanado(req, res) {
   }
 }
 
+
 async function listarStockPorAlmacen(req, res) {
   try {
-    const [rows] = await pool.query(
+    const db = req.db;
+
+    const [rows] = await db.query(
       `SELECT
          s.producto_id,
          s.almacen_id,
@@ -548,6 +558,7 @@ async function listarStockPorAlmacen(req, res) {
     );
 
     res.json(rows);
+
   } catch (err) {
     console.error(err);
 
@@ -556,8 +567,12 @@ async function listarStockPorAlmacen(req, res) {
     });
   }
 }
+
+
 async function disponibilidadVentas(req, res) {
   try {
+    const db = req.db;
+
     const {
       producto_id,
       almacen_id,
@@ -570,7 +585,7 @@ async function disponibilidadVentas(req, res) {
       });
     }
 
-    const [stockRows] = await pool.query(
+    const [stockRows] = await db.query(
       `SELECT COALESCE(cantidad, 0) AS stock_fisico
        FROM stock
        WHERE producto_id = ?
@@ -608,7 +623,7 @@ async function disponibilidadVentas(req, res) {
       params.push(orden_id);
     }
 
-    const [reservadoRows] = await pool.query(
+    const [reservadoRows] = await db.query(
       sqlReservado,
       params
     );
@@ -638,6 +653,7 @@ async function disponibilidadVentas(req, res) {
     });
   }
 }
+
 
 module.exports = {
   registrarMovimiento,

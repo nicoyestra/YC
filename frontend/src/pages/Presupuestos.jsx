@@ -31,6 +31,45 @@ function dinero(valor) {
   }).format(Number(valor || 0));
 }
 
+
+function escaparHtml(valor) {
+  return String(valor ?? '').replace(/[&<>"']/g, (caracter) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[caracter]));
+}
+
+function imprimirPresupuesto(p) {
+  if (!p) return;
+  const empresa = p.empresa || {};
+  const cliente = p.cliente_nombre || 'Cliente';
+  const fecha = String(p.fecha || '').slice(0, 10);
+  const valido = p.valido_hasta ? String(p.valido_hasta).slice(0, 10) : 'No especificada';
+  const filas = (p.detalle || []).map((item) => `
+    <tr>
+      <td>${escaparHtml(item.sku || item.codigo_barras || '')}</td>
+      <td>${escaparHtml(item.producto_nombre || item.descripcion || '')}</td>
+      <td class="num">${escaparHtml(item.cantidad)}</td>
+      <td class="num">${dinero(item.precio_unitario)}</td>
+      <td class="num">${Number(item.descuento_porcentaje || 0)}%</td>
+      <td class="num">${Number(item.iva_porcentaje || 0)}%</td>
+      <td class="num">${dinero(item.total)}</td>
+    </tr>`).join('');
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if (!w) { alert('El navegador bloqueó la ventana de impresión. Permití las ventanas emergentes para este sitio.'); return; }
+  w.document.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Presupuesto ${escaparHtml(p.numero)}</title>
+  <style>
+  @page{size:A4;margin:16mm}*{box-sizing:border-box}body{font:12px Arial,sans-serif;color:#172033;margin:0}.top{display:flex;justify-content:space-between;gap:24px;border-bottom:3px solid #155eef;padding-bottom:18px}.brand h1{font-size:22px;margin:0 0 7px}.muted{color:#5b6473;line-height:1.5}.doc{text-align:right}.doc h2{font-size:22px;margin:0 0 8px;color:#155eef}.notice{border:1px solid #b9c8e5;background:#f4f7ff;padding:9px;margin:16px 0;font-weight:bold;text-align:center;letter-spacing:.5px}.parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:20px 0}.parties h3{font-size:11px;text-transform:uppercase;color:#667085;margin-bottom:7px}table{width:100%;border-collapse:collapse;margin-top:16px}th{background:#eef3fb;text-align:left;font-size:10px;text-transform:uppercase}th,td{border:1px solid #d9e0eb;padding:8px 6px;vertical-align:top}.num{text-align:right;white-space:nowrap}.totals{width:300px;margin:18px 0 0 auto}.totals div{display:flex;justify-content:space-between;padding:5px 0}.totals .grand{font-size:17px;border-top:2px solid #172033;margin-top:5px;padding-top:10px;font-weight:bold}.notes{margin-top:20px;padding:12px;background:#f7f8fa;white-space:pre-wrap}.foot{margin-top:30px;border-top:1px solid #d9e0eb;padding-top:12px;color:#667085;font-size:10px}@media print{button{display:none}}
+  </style></head><body>
+  <div class="top"><div class="brand"><h1>${escaparHtml(empresa.nombre_fantasia || empresa.razon_social || 'YC System')}</h1><div class="muted">${empresa.razon_social && empresa.nombre_fantasia ? escaparHtml(empresa.razon_social)+'<br>' : ''}${empresa.cuit ? 'CUIT: '+escaparHtml(empresa.cuit)+'<br>' : ''}${empresa.direccion ? escaparHtml(empresa.direccion)+'<br>' : ''}${empresa.telefono ? 'Tel.: '+escaparHtml(empresa.telefono)+'<br>' : ''}${empresa.email ? escaparHtml(empresa.email) : ''}</div></div><div class="doc"><h2>PRESUPUESTO</h2><strong>${escaparHtml(p.numero || '')}</strong><div class="muted">Fecha: ${escaparHtml(fecha)}<br>Válido hasta: ${escaparHtml(valido)}<br>Estado: ${escaparHtml(p.estado || 'borrador')}</div></div></div>
+  <div class="notice">PRESUPUESTO COMERCIAL — NO ES FACTURA NI COMPROBANTE FISCAL</div>
+  <div class="parties"><div><h3>Presupuestado para</h3><strong>${escaparHtml(cliente)}</strong><div class="muted">${p.cuit_dni ? 'CUIT/DNI: '+escaparHtml(p.cuit_dni)+'<br>' : ''}${p.direccion ? escaparHtml(p.direccion)+'<br>' : ''}${p.telefono ? 'Tel.: '+escaparHtml(p.telefono)+'<br>' : ''}${p.email ? escaparHtml(p.email) : ''}</div></div><div><h3>Condiciones</h3><div>Validez de la oferta: hasta ${escaparHtml(valido)}</div><div>Los precios y condiciones corresponden a este presupuesto.</div></div></div>
+  <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant.</th><th class="num">Precio unit.</th><th class="num">Desc.</th><th class="num">IVA</th><th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table>
+  <div class="totals"><div><span>Subtotal</span><strong>${dinero(p.subtotal)}</strong></div><div><span>Descuentos</span><strong>− ${dinero(p.descuento_total)}</strong></div><div><span>IVA</span><strong>${dinero(p.impuestos)}</strong></div><div class="grand"><span>TOTAL</span><strong>${dinero(p.total)}</strong></div></div>
+  ${p.observaciones ? `<div class="notes"><strong>Observaciones y condiciones</strong><br>${escaparHtml(p.observaciones)}</div>` : ''}
+  <div class="foot">Este documento es una cotización comercial. No acredita pago ni reemplaza una factura fiscal.</div><script>window.onload=()=>window.print();</script></body></html>`);
+  w.document.close();
+}
+
 function calcularItem(item) {
   const cantidad = Number(item.cantidad || 0);
   const precio = Number(item.precio_unitario || 0);
@@ -420,6 +459,11 @@ export default function Presupuestos() {
                         <div><span>Descuentos</span><strong>{dinero(detalle.descuento_total)}</strong></div>
                         <div><span>IVA</span><strong>{dinero(detalle.impuestos)}</strong></div>
                         <div><span>Total</span><strong>{dinero(detalle.total)}</strong></div>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+                        <button type="button" className="boton boton-presupuesto" onClick={() => imprimirPresupuesto(detalle)}>
+                          Imprimir / Guardar PDF para cliente
+                        </button>
                       </div>
                       {detalle.observaciones && <p><strong>Observaciones:</strong> {detalle.observaciones}</p>}
                       <table>

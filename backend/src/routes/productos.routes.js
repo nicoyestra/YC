@@ -6,7 +6,9 @@ const { verificarToken, permitirRoles } = require('../middlewares/auth.middlewar
 router.use(verificarToken);
 
 router.get('/', ctrl.listar);
+router.post('/importar', permitirRoles('admin', 'inventario', 'compras'), ctrl.importarCatalogo);
 router.get('/bajo-stock', ctrl.productosBajoStock);
+router.get('/precios-oferta', ctrl.listarPreciosOferta);
 router.get('/codigo/:codigo', ctrl.buscarPorCodigoBarras);
 router.get('/:id', ctrl.obtener);
 router.post('/', permitirRoles('admin', 'inventario', 'compras'), ctrl.crear);
