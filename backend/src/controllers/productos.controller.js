@@ -462,7 +462,17 @@ async function importarCatalogo(req, res) {
         const sku = f.codigo.slice(0, 50);
         const nombre = `${f.marca ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
         const descripcionCompleta = [f.modelo && f.modelo !== f.descripcion ? `Modelo: ${f.modelo}` : '', f.detalle].filter(Boolean).join(' | ').slice(0, 60000) || null;
-        const [ex] = await cx.query('SELECT id, precio_costo, precio_venta FROM productos WHERE sku = ? LIMIT 1', [sku]);
+        // Buscar por SKU exacto y también por código normalizado: CHM usa
+        // indistintamente 52-0403 y 52 0403. Sin esto se crean duplicados y
+        // la oferta queda vinculada a otro producto distinto.
+        const [todos] = await cx.query('SELECT id, sku, precio_costo, precio_venta FROM productos');
+        const claveBuscada = normalize(sku);
+        const candidatos = todos.filter((p) => normalize(p.sku) === claveBuscada);
+        // Preferir el SKU canónico del catálogo (normalmente con guion) antes
+        // que un duplicado que pudo haberse creado con espacios al importar la oferta.
+        const ex = candidatos.length
+          ? [candidatos.find((p) => String(p.sku || '').includes('-')) || candidatos[0]]
+          : [];
         let productoId;
         if (ex.length) {
           productoId = ex[0].id;

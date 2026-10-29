@@ -23,6 +23,7 @@ export default function Compras() {
   const [proveedores, setProveedores] = useState([]);
   const [ordenes, setOrdenes] = useState([]);
   const [productos, setProductos] = useState([]);
+  const [preciosOfertaCompra, setPreciosOfertaCompra] = useState([]);
   const [almacenes, setAlmacenes] = useState([]);
 
   const [busquedaProveedor, setBusquedaProveedor] = useState('');
@@ -104,6 +105,12 @@ export default function Compras() {
 
   useEffect(() => {
     cargar();
+    api.get('/productos/precios-oferta')
+      .then(({ data }) => setPreciosOfertaCompra(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        console.error('No se pudieron cargar ofertas de compra', err);
+        setPreciosOfertaCompra([]);
+      });
   }, []);
 
   function buscarProveedor(e) {
@@ -165,11 +172,14 @@ export default function Compras() {
         precio_unitario: '',
       };
     } else {
+      const oferta = preciosOfertaCompra.find((o) =>
+        Number(o.producto_id) === Number(producto.id) &&
+        Number(o.proveedor_id) === Number(nuevaOrden.proveedor_id)
+      );
       items[index] = {
         ...items[index],
         producto_id: producto.id,
-        precio_unitario:
-          producto.precio_costo ?? '',
+        precio_unitario: oferta ? oferta.precio_neto : (producto.precio_costo ?? ''),
       };
     }
 
@@ -177,6 +187,22 @@ export default function Compras() {
       ...nuevaOrden,
       items,
     });
+  }
+
+  function cambiarProveedorOrden(proveedorId) {
+    const items = nuevaOrden.items.map((item) => {
+      const producto = productos.find((p) => Number(p.id) === Number(item.producto_id));
+      if (!producto) return item;
+      const oferta = preciosOfertaCompra.find((o) =>
+        Number(o.producto_id) === Number(producto.id) &&
+        Number(o.proveedor_id) === Number(proveedorId)
+      );
+      return {
+        ...item,
+        precio_unitario: oferta ? oferta.precio_neto : (producto.precio_costo ?? ''),
+      };
+    });
+    setNuevaOrden({ ...nuevaOrden, proveedor_id: proveedorId, items });
   }
 
   function agregarItem() {
@@ -547,11 +573,7 @@ export default function Compras() {
                   nuevaOrden.proveedor_id
                 }
                 onChange={(e) =>
-                  setNuevaOrden({
-                    ...nuevaOrden,
-                    proveedor_id:
-                      e.target.value,
-                  })
+                  cambiarProveedorOrden(e.target.value)
                 }
                 required
               >

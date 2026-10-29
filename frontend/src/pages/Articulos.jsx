@@ -378,7 +378,9 @@ export default function Articulos() {
       const libro = XLSX.read(buffer, { type: 'array' });
       const preferida = tipo === 'oferta'
         ? libro.SheetNames.find((n) => /oferta/i.test(n)) || libro.SheetNames[0]
-        : libro.SheetNames.find((n) => /catalogo habitual/i.test(n)) || libro.SheetNames[0];
+        : libro.SheetNames.find((n) => /catalogo habitual/i.test(n))
+          || libro.SheetNames.find((n) => /catalogo comercial/i.test(n))
+          || libro.SheetNames[0];
       const hoja = libro.Sheets[preferida];
       const datos = XLSX.utils.sheet_to_json(hoja, { defval: '', raw: false });
       if (!datos.length) throw new Error('La hoja seleccionada está vacía.');
@@ -395,7 +397,7 @@ export default function Articulos() {
         const codigo = get('Codigo', 'Codigo oferta', 'Codigo normalizado', 'SKU', 'Articulo');
         const precio = tipo === 'oferta'
           ? get('Costo neto oferta', 'Precio neto', 'Lista s/IVA', 'Precio')
-          : get('Costo neto lista', 'Lista s/IVA', 'Precio neto', 'Precio');
+          : get('Costo neto lista', 'Lista s/IVA', 'Costo neto para compra', 'Precio neto', 'Precio');
         return {
           codigo: String(codigo ?? '').trim(),
           codigo_normalizado: String(get('Codigo normalizado') || codigo || '').trim(),
