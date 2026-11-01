@@ -364,7 +364,46 @@ export default function Articulos() {
 
 
   function normalizarEncabezado(valor) {
-    return String(valor ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    return String(valor ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+  }
+
+  // Convierte importes que pueden venir como número de Excel o como texto
+  // con símbolo de moneda y separadores locales (ej.: "$ 149.999,00").
+  function convertirPrecioExcel(valor) {
+    if (typeof valor === 'number') {
+      return Number.isFinite(valor) ? valor : NaN;
+    }
+    if (valor === null || valor === undefined || valor === '') return NaN;
+
+    let texto = String(valor).trim().replace(/[^\d,.-]/g, '');
+    if (!texto) return NaN;
+
+    const ultimaComa = texto.lastIndexOf(',');
+    const ultimoPunto = texto.lastIndexOf('.');
+
+    if (ultimaComa >= 0 && ultimoPunto >= 0) {
+      // El separador que aparece último se considera decimal.
+      if (ultimaComa > ultimoPunto) {
+        texto = texto.replace(/\./g, '').replace(',', '.');
+      } else {
+        texto = texto.replace(/,/g, '');
+      }
+    } else if (ultimaComa >= 0) {
+      const decimales = texto.length - ultimaComa - 1;
+      texto = decimales > 0 && decimales <= 2
+        ? texto.replace(',', '.')
+        : texto.replace(/,/g, '');
+    } else if (ultimoPunto >= 0) {
+      const decimales = texto.length - ultimoPunto - 1;
+      if (decimales === 3) texto = texto.replace(/\./g, '');
+    }
+
+    const numero = Number(texto);
+    return Number.isFinite(numero) ? numero : NaN;
   }
 
   async function prepararArchivoImportacion(archivo, tipo = tipoImportacion) {
@@ -372,6 +411,7 @@ export default function Articulos() {
     setFilasImportacion([]);
     setResumenImportacion('');
     if (!archivo) return;
+
     try {
       const buffer = await archivo.arrayBuffer();
       const libro = XLSX.read(buffer, { type: 'array' });
@@ -381,47 +421,101 @@ export default function Articulos() {
           || libro.SheetNames.find((n) => /catalogo comercial/i.test(n))
           || libro.SheetNames[0];
       const hoja = libro.Sheets[preferida];
-      const datos = XLSX.utils.sheet_to_json(hoja, { defval: '', raw: false });
-      if (!datos.length) throw new Error('La hoja seleccionada está vacía.');
-      const filas = datos.map((fila) => {
-        const m = {};
-        Object.entries(fila).forEach(([k, v]) => { m[normalizarEncabezado(k)] = v; });
+      if (!hoja) throw new Error('No se encontró una hoja válida en el archivo.');
+
+      // raw:true conserva los importes numéricos como números y evita que
+      // el formato visual "$ #,##0" convierta el precio en texto inválido.
+      // blankrows:true conserva la posición física de los encabezados.
+      const matriz = XLSX.utils.sheet_to_json(hoja, {
+        header: 1,
+        defval: '',
+        raw: true,
+        blankrows: true,
+      });
+
+      const indiceEncabezado = matriz.findIndex((fila) => {
+        const encabezados = fila.map(normalizarEncabezado);
+        const tieneCodigo = encabezados.some((h) =>
+          ['codigo', 'codigooferta', 'codigonormalizado', 'sku', 'articulo'].includes(h)
+        );
+        const tienePrecio = encabezados.some((h) =>
+          ['precio', 'precioneto', 'preciooferta', 'costonetolista', 'costonetooferta', 'listasiva'].includes(h)
+        );
+        return tieneCodigo && tienePrecio;
+      });
+
+      if (indiceEncabezado < 0) {
+        throw new Error(`No pude identificar la fila de encabezados en la hoja "${preferida}". Necesito columnas de código y precio.`);
+      }
+
+      const encabezados = matriz[indiceEncabezado].map((v) => String(v ?? '').trim());
+      const datos = matriz.slice(indiceEncabezado + 1).map((valores) => {
+        const fila = {};
+        encabezados.forEach((encabezado, i) => {
+          if (encabezado) fila[normalizarEncabezado(encabezado)] = valores[i] ?? '';
+        });
+        return fila;
+      });
+
+      const filas = datos.map((m) => {
         const get = (...keys) => {
           for (const key of keys) {
-            const v = m[normalizarEncabezado(key)];
-            if (v !== undefined && v !== '') return v;
+            const valor = m[normalizarEncabezado(key)];
+            if (valor !== undefined && valor !== '') return valor;
           }
           return '';
         };
+
         const codigo = get('Codigo', 'Codigo oferta', 'Codigo normalizado', 'SKU', 'Articulo');
-        const precio = tipo === 'oferta'
-          ? get('Costo neto oferta', 'Precio neto', 'Lista s/IVA', 'Precio')
-          : get('Costo neto lista', 'Lista s/IVA', 'Costo neto para compra', 'Precio neto', 'Precio');
+        const precioOriginal = tipo === 'oferta'
+          ? get('Costo neto oferta', 'Precio neto', 'Lista s/IVA', 'Precio', 'Precio*', 'Precio oferta')
+          : get('Costo neto lista', 'Lista s/IVA', 'Costo neto para compra', 'Precio neto', 'Precio', 'Precio*');
+        const tipoArticulo = get('Tipo');
+        const carroceria = get('Carroceria', 'Carroc.');
+        const observaciones = get('Observaciones', 'Caracteristicas', 'Compatibilidades');
+        const color = get('Color');
+        const detalles = [
+          tipoArticulo ? `Tipo: ${tipoArticulo}` : '',
+          carroceria ? `Carrocería: ${carroceria}` : '',
+          observaciones,
+          color ? `Color: ${color}` : '',
+        ].filter(Boolean).join(' | ');
+
         return {
           codigo: String(codigo ?? '').trim(),
           codigo_normalizado: String(get('Codigo normalizado') || codigo || '').trim(),
           nombre: String(get('Descripcion', 'Modelo descripcion', 'Nombre', 'Modelo') || '').trim(),
           Marca: String(get('Marca') || '').trim(),
           Modelo: String(get('Modelo', 'Modelo descripcion') || '').trim(),
-          Caracteristicas: String(get('Caracteristicas', 'Observaciones', 'Carroceria', 'Compatibilidades') || '').trim(),
-          precio_neto: Number(String(precio).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')),
+          Caracteristicas: detalles,
+          precio_neto: convertirPrecioExcel(precioOriginal),
           IVA_pct: Number(get('IVA pct', 'IVA') || 21),
-          origen: String(get('Origen') || (tipo === 'oferta' ? 'Lista de descuentos' : 'Catálogo general'))
+          origen: String(get('Origen') || (tipo === 'oferta' ? `Lista de descuentos - ${archivo.name}` : 'Catálogo general')),
         };
-      }).filter((x) => x.codigo && x.nombre && Number.isFinite(x.precio_neto) && x.precio_neto >= 0);
-      if (!filas.length) throw new Error(`No encontré filas válidas en la hoja "${preferida}". Usá el archivo preparado para YC System, con columnas de código, descripción y precio neto.`);
+      }).filter((x) =>
+        x.codigo && x.nombre && Number.isFinite(x.precio_neto) && x.precio_neto >= 0
+      );
+
+      if (!filas.length) {
+        throw new Error(`Encontré los encabezados en la fila ${indiceEncabezado + 1}, pero no encontré filas válidas con código, modelo y precio. Revisá que la hoja "${preferida}" tenga datos debajo de los encabezados.`);
+      }
+
       const claves = new Set();
       const unicas = [];
       let duplicadas = 0;
       filas.forEach((fila) => {
         const clave = fila.codigo_normalizado.toUpperCase().replace(/[^A-Z0-9]/g, '');
-        if (claves.has(clave)) { duplicadas++; return; }
+        if (claves.has(clave)) {
+          duplicadas++;
+          return;
+        }
         claves.add(clave);
         unicas.push(fila);
       });
+
       setArchivoImportacion(archivo);
       setFilasImportacion(unicas);
-      setResumenImportacion(`Hoja: ${preferida}. ${filas.length} filas válidas; ${unicas.length} códigos únicos; ${duplicadas} duplicados omitidos en la vista previa.`);
+      setResumenImportacion(`Hoja: ${preferida}. Encabezados detectados en fila ${indiceEncabezado + 1}. ${filas.length} filas válidas; ${unicas.length} códigos únicos; ${duplicadas} duplicados omitidos en la vista previa.`);
     } catch (err) {
       setError(err.message || 'No se pudo leer el archivo Excel.');
     }
@@ -552,17 +646,26 @@ export default function Articulos() {
             <>
               <div style={{ overflowX: 'auto', marginTop: 12 }}>
                 <table>
-                  <thead><tr><th>Código</th><th>Artículo</th><th>Precio neto</th><th>IVA %</th></tr></thead>
+                  <thead><tr><th>Código</th><th>Artículo</th><th>Precio neto</th><th>IVA %</th><th>Precio con IVA</th></tr></thead>
                   <tbody>
-                    {filasImportacion.slice(0, 8).map((fila, i) => (
-                      <tr key={`${fila.codigo}-${i}`}>
-                        <td>{fila.codigo}</td><td>{fila.nombre}</td><td>${fila.precio_neto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td><td>{fila.IVA_pct}</td>
-                      </tr>
-                    ))}
+                    {filasImportacion.slice(0, 8).map((fila, i) => {
+                      const neto = Number(fila.precio_neto || 0);
+                      const iva = Number(fila.IVA_pct ?? 21);
+                      const totalConIva = neto * (1 + iva / 100);
+                      return (
+                        <tr key={`${fila.codigo}-${i}`}>
+                          <td>{fila.codigo}</td>
+                          <td>{fila.nombre}</td>
+                          <td>${neto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td>{iva}%</td>
+                          <td><strong>${totalConIva.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. No se cargarán unidades en stock.</p>
+              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. El sistema guarda el precio neto y el porcentaje de IVA; el precio final con IVA se calcula a partir de ambos. No se cargarán unidades en stock.</p>
               <button type="button" className="boton" onClick={ejecutarImportacion} disabled={procesandoImportacion}>
                 {procesandoImportacion ? 'Importando...' : `Confirmar importación (${filasImportacion.length})`}
               </button>
@@ -1026,7 +1129,7 @@ export default function Articulos() {
                           <div key={o.id} style={{ marginBottom: 6 }}>
                             <strong>{o.proveedor_nombre}</strong>
                             <div>${Number(o.precio_neto || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>(neto)</small></div>
-                            <strong>${(Number(o.precio_neto || 0) * (1 + Number(producto.iva_porcentaje || 0) / 100)).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>(con IVA)</small></strong>
+                            <strong>${(Number(o.precio_neto || 0) * (1 + Number(o.iva_porcentaje ?? producto.iva_porcentaje ?? 21) / 100)).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>(con IVA {Number(o.iva_porcentaje ?? producto.iva_porcentaje ?? 21)}%)</small></strong>
                           </div>
                         ))}
                       </div>
@@ -1094,13 +1197,17 @@ export default function Articulos() {
 
       {productoComparar && (() => {
         const producto = productoComparar;
-        const iva = Number(producto.iva_porcentaje || 0);
+        const ivaHabitual = Number(producto.iva_porcentaje ?? 21);
         const ofertas = preciosOferta.filter((o) => Number(o.producto_id) === Number(producto.id));
         const fmt = (n) => `$${Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         const costoHabitual = Number(producto.precio_costo || 0);
         const opciones = [
-          { proveedor: producto.proveedor_nombre || 'Proveedor habitual', neto: costoHabitual, total: costoHabitual * (1 + iva / 100), tipo: 'Habitual' },
-          ...ofertas.map((o) => ({ proveedor: o.proveedor_nombre || 'Proveedor de oferta', neto: Number(o.precio_neto || 0), total: Number(o.precio_neto || 0) * (1 + iva / 100), tipo: o.origen || 'Oferta' }))
+          { proveedor: producto.proveedor_nombre || 'Proveedor habitual', neto: costoHabitual, iva: ivaHabitual, total: costoHabitual * (1 + ivaHabitual / 100), tipo: 'Habitual' },
+          ...ofertas.map((o) => {
+            const ivaOferta = Number(o.iva_porcentaje ?? ivaHabitual);
+            const neto = Number(o.precio_neto || 0);
+            return { proveedor: o.proveedor_nombre || 'Proveedor de oferta', neto, iva: ivaOferta, total: neto * (1 + ivaOferta / 100), tipo: o.origen || 'Oferta' };
+          })
         ].filter((o, i, arr) => i === 0 || !(o.proveedor === arr[0].proveedor && o.neto === arr[0].neto));
         const minimo = opciones.length > 1 ? Math.min(...opciones.map((o) => o.total)) : null;
         return (
@@ -1110,9 +1217,9 @@ export default function Articulos() {
                 <div><h2 style={{ marginTop: 0 }}>Comparar proveedores</h2><strong>{producto.nombre}</strong><div style={{ color: '#64748b', marginTop: 4 }}>Código: {producto.sku}</div></div>
                 <button type="button" className="boton boton-secundario" onClick={() => setProductoComparar(null)}>Cerrar</button>
               </div>
-              <p style={{ color: '#475569' }}>Comparación con IVA incluido al {iva}%. La oferta se muestra solo si está guardada para este mismo artículo/código.</p>
-              <div style={{ overflowX: 'auto' }}><table style={{ width: '100%' }}><thead><tr><th>Proveedor</th><th>Tipo de precio</th><th>Neto</th><th>Total con IVA</th><th>Comparación</th></tr></thead><tbody>
-                {opciones.map((o, i) => <tr key={`${o.proveedor}-${o.tipo}-${i}`}><td><strong>{o.proveedor}</strong></td><td>{o.tipo}</td><td>{fmt(o.neto)}</td><td><strong>{fmt(o.total)}</strong></td><td>{minimo !== null && o.total === minimo ? <strong style={{ color: '#15803d' }}>Menor precio</strong> : minimo !== null ? fmt(o.total - minimo) + ' más caro' : 'Sin otro precio para comparar'}</td></tr>)}
+              <p style={{ color: '#475569' }}>Comparación con IVA incluido. Cada oferta utiliza el porcentaje de IVA guardado al importarla.</p>
+              <div style={{ overflowX: 'auto' }}><table style={{ width: '100%' }}><thead><tr><th>Proveedor</th><th>Tipo de precio</th><th>Neto</th><th>IVA</th><th>Total con IVA</th><th>Comparación</th></tr></thead><tbody>
+                {opciones.map((o, i) => <tr key={`${o.proveedor}-${o.tipo}-${i}`}><td><strong>{o.proveedor}</strong></td><td>{o.tipo}</td><td>{fmt(o.neto)}</td><td>{o.iva}%</td><td><strong>{fmt(o.total)}</strong></td><td>{minimo !== null && o.total === minimo ? <strong style={{ color: '#15803d' }}>Menor precio</strong> : minimo !== null ? fmt(o.total - minimo) + ' más caro' : 'Sin otro precio para comparar'}</td></tr>)}
               </tbody></table></div>
               {ofertas.length === 0 && <p style={{ marginTop: 16, color: '#b45309' }}>Este artículo no tiene una oferta vinculada. Probá buscar el código en la lista de ofertas o verificá que coincida con el código del proveedor.</p>}
             </section>

@@ -323,17 +323,36 @@ async function actualizar(req, res) {
 async function eliminar(req, res) {
   try {
     const db = req.db;
-    const [result] = await db.query('DELETE FROM productos WHERE id = ?', [req.params.id]);
-    if (!result.affectedRows) return res.status(404).json({ error: 'Artículo no encontrado' });
-    return res.json({ mensaje: 'Artículo eliminado definitivamente' });
-  } catch (err) {
-    console.error('Error eliminando artículo:', err);
-    if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
-      return res.status(409).json({ error: 'No se puede eliminar este artículo porque tiene compras, ventas, stock u otros movimientos asociados. Para conservar el historial, debe desactivarse.' });
+
+    const [result] = await db.query(
+      `UPDATE productos
+       SET activo = FALSE
+       WHERE id = ?`,
+      [req.params.id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        error: 'Producto no encontrado'
+      });
     }
-    return res.status(500).json({ error: 'Error al eliminar artículo' });
+
+    res.json({
+      mensaje: 'Producto desactivado'
+    });
+
+  } catch (err) {
+    console.error(
+      'Error eliminando producto:',
+      err
+    );
+
+    res.status(500).json({
+      error: 'Error al eliminar producto'
+    });
   }
 }
+
 
 async function productosBajoStock(req, res) {
   try {
@@ -398,6 +417,7 @@ async function importarCatalogo(req, res) {
         codigo_oferta VARCHAR(100) NOT NULL,
         descripcion_oferta VARCHAR(255) NULL,
         precio_neto DECIMAL(12,2) NOT NULL,
+        iva_porcentaje DECIMAL(5,2) NOT NULL DEFAULT 21,
         origen VARCHAR(150) NOT NULL,
         importado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_oferta_producto_origen (producto_id, proveedor_id, origen),
@@ -405,12 +425,23 @@ async function importarCatalogo(req, res) {
         CONSTRAINT fk_pop_proveedor FOREIGN KEY (proveedor_id) REFERENCES proveedores(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
-    const nombreProveedor = String(req.body?.proveedor_nombre || req.body?.proveedor || 'Proveedor de importación').trim().slice(0, 200);
-    const [provRows] = await db.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', [nombreProveedor]);
+    // Compatibilidad con empresas que ya tenían creada la tabla sin IVA propio de la oferta.
+    const [columnasOferta] = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'precios_oferta_proveedor'
+         AND COLUMN_NAME = 'iva_porcentaje'`
+    );
+    if (!columnasOferta.length) {
+      await db.query(
+        'ALTER TABLE precios_oferta_proveedor ADD COLUMN iva_porcentaje DECIMAL(5,2) NOT NULL DEFAULT 21 AFTER precio_neto'
+      );
+    }
+    const [provRows] = await db.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', ['CHM']);
     let proveedorId;
     if (provRows.length) proveedorId = provRows[0].id;
     else {
-      const [pr] = await db.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', [nombreProveedor]);
+      const [pr] = await db.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', ['CHM']);
       proveedorId = pr.insertId;
     }
 
@@ -429,7 +460,7 @@ async function importarCatalogo(req, res) {
         codigo, clave, descripcion,
         marca: txt(f.Marca), modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
-        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'Lista de descuentos' : 'Catálogo general')),
+        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual CHM')),
         iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21
       });
     }
@@ -444,8 +475,9 @@ async function importarCatalogo(req, res) {
         const sku = f.codigo.slice(0, 50);
         const nombre = `${f.marca ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
         const descripcionCompleta = [f.modelo && f.modelo !== f.descripcion ? `Modelo: ${f.modelo}` : '', f.detalle].filter(Boolean).join(' | ').slice(0, 60000) || null;
-        // Buscar por SKU exacto y también por código normalizado para evitar duplicados
-        // cuando el proveedor utiliza guiones, espacios u otros separadores.
+        // Buscar por SKU exacto y también por código normalizado: CHM usa
+        // indistintamente 52-0403 y 52 0403. Sin esto se crean duplicados y
+        // la oferta queda vinculada a otro producto distinto.
         const [todos] = await cx.query('SELECT id, sku, precio_costo, precio_venta FROM productos');
         const claveBuscada = normalize(sku);
         const candidatos = todos.filter((p) => normalize(p.sku) === claveBuscada);
@@ -465,21 +497,22 @@ async function importarCatalogo(req, res) {
           }
           actualizados++;
         } else {
+          const costoInicial = tipo === 'oferta' ? 0 : f.precio;
           const [p] = await cx.query(
             `INSERT INTO productos (sku, nombre, descripcion, proveedor_id, precio_costo, precio_venta, iva_porcentaje, stock_minimo, unidad_medida, activo)
              VALUES (?, ?, ?, ?, ?, 0, ?, 0, 'unidad', TRUE)`,
-            [sku, nombre, descripcionCompleta, proveedorId, f.precio, f.iva]
+            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, f.iva]
           );
           productoId = p.insertId;
           creados++;
         }
         if (tipo === 'oferta') {
           await cx.query(
-            `INSERT INTO precios_oferta_proveedor (producto_id, proveedor_id, codigo_oferta, descripcion_oferta, precio_neto, origen)
-             VALUES (?, ?, ?, ?, ?, ?)
+            `INSERT INTO precios_oferta_proveedor (producto_id, proveedor_id, codigo_oferta, descripcion_oferta, precio_neto, iva_porcentaje, origen)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE codigo_oferta = VALUES(codigo_oferta), descripcion_oferta = VALUES(descripcion_oferta),
-               precio_neto = VALUES(precio_neto), importado_en = CURRENT_TIMESTAMP`,
-            [productoId, proveedorId, f.codigo, nombre, f.precio, f.origen.slice(0,150)]
+               precio_neto = VALUES(precio_neto), iva_porcentaje = VALUES(iva_porcentaje), importado_en = CURRENT_TIMESTAMP`,
+            [productoId, proveedorId, f.codigo, nombre, f.precio, f.iva, f.origen.slice(0,150)]
           );
           ofertas++;
         }
@@ -503,9 +536,16 @@ async function importarCatalogo(req, res) {
 async function listarPreciosOferta(req, res) {
   try {
     const db = req.db;
+    const [columnasOferta] = await db.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'precios_oferta_proveedor'
+         AND COLUMN_NAME = 'iva_porcentaje'`
+    );
+    const campoIvaOferta = columnasOferta.length ? 'po.iva_porcentaje' : '21 AS iva_porcentaje';
     const [rows] = await db.query(`
       SELECT po.id, po.producto_id, po.proveedor_id, po.codigo_oferta,
-             po.descripcion_oferta, po.precio_neto, po.origen, po.importado_en,
+             po.descripcion_oferta, po.precio_neto, ${campoIvaOferta}, po.origen, po.importado_en,
              p.sku, p.nombre AS producto_nombre, pr.nombre AS proveedor_nombre
       FROM precios_oferta_proveedor po
       INNER JOIN productos p ON p.id = po.producto_id
