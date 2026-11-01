@@ -761,6 +761,112 @@ async function restablecerPasswordAdmin(req, res) {
   }
 }
 
+
+// =========================================================
+// REINICIO TOTAL DE UNA EMPRESA (CON RESPALDO PREVIO)
+// Conserva roles, usuarios, empleados y almacenes para mantener
+// el acceso y la configuración básica de la empresa.
+// =========================================================
+async function reiniciarDatosEmpresa(req, res) {
+  const empresaId = Number(req.params.id);
+  const confirmacion = String(req.body?.confirmacion || '').trim();
+  if (!Number.isInteger(empresaId) || empresaId <= 0) {
+    return res.status(400).json({ error: 'ID de empresa inválido' });
+  }
+
+  let tenant = null;
+  try {
+    // La base se obtiene exclusivamente desde yc_master; nunca desde el body.
+    const [rows] = await masterPool.query(
+      'SELECT id, codigo, db_name FROM empresas WHERE id = ? LIMIT 1',
+      [empresaId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Empresa no encontrada' });
+    const empresa = rows[0];
+    const dbName = String(empresa.db_name || '');
+    if (!/^[a-zA-Z0-9_]+$/.test(dbName) || dbName.toLowerCase() === 'yc_master' || dbName.toLowerCase() === 'erp_db') {
+      return res.status(400).json({ error: 'La base asociada no es válida para esta operación.' });
+    }
+    if (confirmacion !== String(empresa.codigo)) {
+      return res.status(400).json({ error: 'La confirmación no coincide con el código de la empresa.' });
+    }
+
+    tenant = await mysql.createConnection(crearConfiguracionMysql(dbName));
+    const [dbRows] = await tenant.query('SELECT DATABASE() AS db_actual');
+    if (!dbRows[0] || dbRows[0].db_actual !== dbName) throw new Error('No se pudo verificar la base de datos de destino.');
+
+    const [tableRows] = await tenant.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+       ORDER BY TABLE_NAME`, [dbName]
+    );
+    const tablas = tableRows.map(r => r.TABLE_NAME).filter(n => !n.startsWith('__yc_backup_'));
+    const conservar = new Set(['roles', 'usuarios', 'empleados', 'almacenes']);
+    const borrar = tablas.filter(n => !conservar.has(n));
+    if (!tablas.includes('usuarios') || !tablas.includes('roles')) {
+      throw new Error('La base no contiene las tablas de acceso esperadas. No se realizó ningún cambio.');
+    }
+
+    const sello = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    const respaldoId = `RST-${empresa.id}-${sello}`;
+    const respaldos = [];
+    // Primero se copia cada tabla operativa. No se vacía nada hasta completar todos los respaldos.
+    for (let i = 0; i < borrar.length; i++) {
+      const tabla = borrar[i];
+      const backup = `__yc_backup_${sello}_${i}`;
+      await tenant.query(`CREATE TABLE \`${backup}\` LIKE \`${tabla}\``);
+      await tenant.query(`INSERT INTO \`${backup}\` SELECT * FROM \`${tabla}\``);
+      respaldos.push({ tabla, backup });
+    }
+
+    try {
+      await tenant.query('SET FOREIGN_KEY_CHECKS = 0');
+      for (const tabla of borrar) await tenant.query(`TRUNCATE TABLE \`${tabla}\``);
+    } finally {
+      await tenant.query('SET FOREIGN_KEY_CHECKS = 1');
+    }
+
+    // Registro de auditoría central. Se guarda el mapa de tablas respaldadas para recuperación posterior.
+    await masterPool.query(`
+      CREATE TABLE IF NOT EXISTS master_reinicios_empresa (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        empresa_id INT NOT NULL,
+        codigo_empresa VARCHAR(100) NOT NULL,
+        db_name VARCHAR(128) NOT NULL,
+        respaldo_id VARCHAR(64) NOT NULL,
+        tablas_vaciadas INT NOT NULL,
+        respaldo_json LONGTEXT NOT NULL,
+        master_usuario VARCHAR(190) NULL,
+        creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await masterPool.query(
+      `INSERT INTO master_reinicios_empresa
+       (empresa_id, codigo_empresa, db_name, respaldo_id, tablas_vaciadas, respaldo_json, master_usuario)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [empresa.id, empresa.codigo, dbName, respaldoId, borrar.length, JSON.stringify(respaldos),
+       req.master?.email || req.master?.usuario || req.master?.id || null]
+    );
+
+    return res.json({
+      mensaje: 'Reinicio completado. Se creó un respaldo previo de los datos operativos.',
+      empresa: empresa.codigo,
+      base: dbName,
+      respaldo_id: respaldoId,
+      tablas_vaciadas: borrar.length,
+      tablas_conservadas: Array.from(conservar).filter(t => tablas.includes(t)),
+    });
+  } catch (error) {
+    console.error('Error en reinicio de empresa:', error);
+    return res.status(500).json({
+      error: 'No se pudo completar el reinicio. Revisá el estado de la empresa antes de volver a intentarlo.',
+      detalle: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  } finally {
+    if (tenant) { try { await tenant.end(); } catch (_) {} }
+  }
+}
+
 module.exports = {
   listarEmpresas,
   resumenMaster,
@@ -768,4 +874,5 @@ module.exports = {
   obtenerEmpresa,
   actualizarEmpresa,
   restablecerPasswordAdmin,
+  reiniciarDatosEmpresa,
 };

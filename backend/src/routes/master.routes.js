@@ -12,6 +12,7 @@ const {
   obtenerEmpresa,
   actualizarEmpresa,
   restablecerPasswordAdmin,
+  reiniciarDatosEmpresa,
 } = require('../controllers/masterEmpresas.controller');
 
 const {
@@ -40,5 +41,6 @@ router.post('/empresas', verificarMaster, crearEmpresa);
 router.get('/empresas/:id', verificarMaster, obtenerEmpresa);
 router.put('/empresas/:id', verificarMaster, actualizarEmpresa);
 router.post('/empresas/:id/restablecer-admin', verificarMaster, restablecerPasswordAdmin);
+router.post('/empresas/:id/reiniciar-datos', verificarMaster, reiniciarDatosEmpresa);
 
 module.exports = router;

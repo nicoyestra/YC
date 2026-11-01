@@ -65,6 +65,8 @@ export default function MasterDashboard() {
   const [guardandoAdministrar, setGuardandoAdministrar] = useState(false);
   const [errorAdministrar, setErrorAdministrar] = useState('');
   const [passwordTemporalAdmin, setPasswordTemporalAdmin] = useState('');
+  const [reiniciandoEmpresa, setReiniciandoEmpresa] = useState(false);
+  const [resultadoReinicio, setResultadoReinicio] = useState(null);
 
   function obtenerConfigMaster() {
     const token = localStorage.getItem('master_token');
@@ -403,6 +405,32 @@ export default function MasterDashboard() {
       setErrorAdministrar(err.response?.data?.error || 'No se pudo restablecer la contraseña.');
     } finally {
       setGuardandoAdministrar(false);
+    }
+  }
+
+  async function reiniciarEmpresaSeleccionada() {
+    if (!empresaAdministrada) return;
+    const codigo = String(empresaAdministrada.codigo || '');
+    const aviso = `ATENCIÓN: se eliminarán todos los datos operativos de ${codigo}. Se conservarán usuarios, roles, empleados, almacenes y datos legales/licencia en Master. Antes se guardará una copia de seguridad.\n\nPara continuar, escribí exactamente: ${codigo}`;
+    const confirmacion = window.prompt(aviso);
+    if (confirmacion === null) return;
+    if (confirmacion.trim() !== codigo) {
+      alert('El código no coincide. No se realizó ningún cambio.');
+      return;
+    }
+    if (!window.confirm(`¿Confirmás el reinicio total de ${codigo}? Esta acción vaciará los datos operativos.`)) return;
+    const config = obtenerConfigMaster();
+    if (!config) { navigate('/master/login'); return; }
+    setReiniciandoEmpresa(true);
+    setResultadoReinicio(null);
+    setErrorAdministrar('');
+    try {
+      const respuesta = await api.post(`/master/empresas/${empresaAdministrada.id}/reiniciar-datos`, { confirmacion: codigo }, config);
+      setResultadoReinicio(respuesta.data);
+    } catch (err) {
+      setErrorAdministrar(err.response?.data?.error || 'No se pudo reiniciar la empresa.');
+    } finally {
+      setReiniciandoEmpresa(false);
     }
   }
 
@@ -1583,6 +1611,14 @@ export default function MasterDashboard() {
                   <p style={{ margin: '0 0 12px' }}><strong>Email de acceso:</strong> {formAdministrar.admin_email || 'No registrado'}</p>
                   <button type="button" className="boton boton-secundario" onClick={generarClaveAdmin} disabled={guardandoAdministrar || !formAdministrar.admin_email}>Generar nueva contraseña temporal</button>
                   {passwordTemporalAdmin && <div style={{ marginTop: 12, padding: 12, border: '1px solid #b7e4c7', background: '#f0fdf4', borderRadius: 8 }}><strong>Nueva contraseña temporal</strong><p style={{ fontFamily: 'monospace', fontSize: 18, margin: '8px 0' }}>{passwordTemporalAdmin}</p><button type="button" className="boton" onClick={copiarPasswordAdmin}>Copiar contraseña</button><p style={{ marginBottom: 0, fontSize: 12 }}>Guardala ahora: no volverá a mostrarse cuando cierres esta ventana.</p></div>}
+                </div>
+                <h3 style={{ marginTop: 24 }}>Mantenimiento de datos</h3>
+                <div style={{ padding: 16, border: '1px solid #f3c6c6', background: '#fffafa', borderRadius: 10 }}>
+                  <strong>Reiniciar datos operativos</strong>
+                  <p style={{ margin: '8px 0', color: '#475467', fontSize: 13 }}>Vacía artículos, clientes, proveedores, precios, ventas, compras, facturación, stock, movimientos, presupuestos, gastos, logística y demás registros operativos de esta empresa.</p>
+                  <p style={{ margin: '8px 0', color: '#475467', fontSize: 13 }}>Se conserva el acceso de usuarios, roles, empleados y almacenes. Los datos legales y la licencia de Master no se modifican. Antes del reinicio se crea una copia de las tablas operativas dentro de la base de esta empresa.</p>
+                  <button type="button" className="boton boton-secundario" onClick={reiniciarEmpresaSeleccionada} disabled={guardandoAdministrar || reiniciandoEmpresa} style={{ borderColor: '#d92d20', color: '#b42318' }}>{reiniciandoEmpresa ? 'Creando respaldo y reiniciando...' : 'Reiniciar datos de esta empresa'}</button>
+                  {resultadoReinicio && <div role="status" style={{ marginTop: 12, padding: 12, background: '#ecfdf3', borderRadius: 8, color: '#027a48' }}><strong>{resultadoReinicio.mensaje}</strong><p style={{ margin: '6px 0 0', fontSize: 13 }}>Respaldo: {resultadoReinicio.respaldo_id} · Tablas vaciadas: {resultadoReinicio.tablas_vaciadas}</p></div>}
                 </div>
                 {errorAdministrar && <p role="status" style={{ marginTop: 16, padding: 12, borderRadius: 8, background: errorAdministrar.includes('correctamente') || errorAdministrar.includes('restablecida') ? '#ecfdf3' : '#fff1f2', color: errorAdministrar.includes('No se pudo') || errorAdministrar.includes('Revisá') ? '#b42318' : '#027a48' }}>{errorAdministrar}</p>}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22, flexWrap: 'wrap' }}>
