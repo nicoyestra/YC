@@ -323,36 +323,17 @@ async function actualizar(req, res) {
 async function eliminar(req, res) {
   try {
     const db = req.db;
-
-    const [result] = await db.query(
-      `UPDATE productos
-       SET activo = FALSE
-       WHERE id = ?`,
-      [req.params.id]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        error: 'Producto no encontrado'
-      });
-    }
-
-    res.json({
-      mensaje: 'Producto desactivado'
-    });
-
+    const [result] = await db.query('DELETE FROM productos WHERE id = ?', [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Artículo no encontrado' });
+    return res.json({ mensaje: 'Artículo eliminado definitivamente' });
   } catch (err) {
-    console.error(
-      'Error eliminando producto:',
-      err
-    );
-
-    res.status(500).json({
-      error: 'Error al eliminar producto'
-    });
+    console.error('Error eliminando artículo:', err);
+    if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
+      return res.status(409).json({ error: 'No se puede eliminar este artículo porque tiene compras, ventas, stock u otros movimientos asociados. Para conservar el historial, debe desactivarse.' });
+    }
+    return res.status(500).json({ error: 'Error al eliminar artículo' });
   }
 }
-
 
 async function productosBajoStock(req, res) {
   try {
@@ -424,11 +405,12 @@ async function importarCatalogo(req, res) {
         CONSTRAINT fk_pop_proveedor FOREIGN KEY (proveedor_id) REFERENCES proveedores(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
-    const [provRows] = await db.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', ['CHM']);
+    const nombreProveedor = String(req.body?.proveedor_nombre || req.body?.proveedor || 'Proveedor de importación').trim().slice(0, 200);
+    const [provRows] = await db.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', [nombreProveedor]);
     let proveedorId;
     if (provRows.length) proveedorId = provRows[0].id;
     else {
-      const [pr] = await db.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', ['CHM']);
+      const [pr] = await db.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', [nombreProveedor]);
       proveedorId = pr.insertId;
     }
 
@@ -447,7 +429,7 @@ async function importarCatalogo(req, res) {
         codigo, clave, descripcion,
         marca: txt(f.Marca), modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
-        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual CHM')),
+        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'Lista de descuentos' : 'Catálogo general')),
         iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21
       });
     }
@@ -462,9 +444,8 @@ async function importarCatalogo(req, res) {
         const sku = f.codigo.slice(0, 50);
         const nombre = `${f.marca ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
         const descripcionCompleta = [f.modelo && f.modelo !== f.descripcion ? `Modelo: ${f.modelo}` : '', f.detalle].filter(Boolean).join(' | ').slice(0, 60000) || null;
-        // Buscar por SKU exacto y también por código normalizado: CHM usa
-        // indistintamente 52-0403 y 52 0403. Sin esto se crean duplicados y
-        // la oferta queda vinculada a otro producto distinto.
+        // Buscar por SKU exacto y también por código normalizado para evitar duplicados
+        // cuando el proveedor utiliza guiones, espacios u otros separadores.
         const [todos] = await cx.query('SELECT id, sku, precio_costo, precio_venta FROM productos');
         const claveBuscada = normalize(sku);
         const candidatos = todos.filter((p) => normalize(p.sku) === claveBuscada);

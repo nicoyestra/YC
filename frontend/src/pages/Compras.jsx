@@ -54,6 +54,17 @@ export default function Compras() {
     items: [{ ...ITEM_VACIO }],
   });
 
+  async function eliminarProveedor(proveedor) {
+    if (!window.confirm(`¿Eliminar el proveedor ${proveedor.nombre}? Si tiene compras o artículos asociados, el sistema protegerá el historial.`)) return;
+    try {
+      await api.delete(`/compras/proveedores/${proveedor.id}`);
+      await cargar(busquedaProveedor, busquedaOrden);
+      setError('');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo eliminar el proveedor. Puede tener movimientos asociados.');
+    }
+  }
+
   async function cargar(
     filtroProveedor = '',
     filtroOrden = ''
@@ -848,6 +859,7 @@ export default function Compras() {
               <th>CUIT</th>
               <th>Email</th>
               <th>Teléfono</th>
+              <th>Acciones</th>
             </tr>
           </thead>
 
@@ -855,7 +867,7 @@ export default function Compras() {
             {proveedores.length === 0 && (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   style={{
                     textAlign: 'center',
                     padding: 28,
@@ -884,6 +896,7 @@ export default function Compras() {
                     {proveedor.telefono ||
                       '—'}
                   </td>
+                  <td><button type="button" className="boton boton-secundario" onClick={() => eliminarProveedor(proveedor)}>Eliminar</button></td>
                 </tr>
               )
             )}

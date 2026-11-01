@@ -147,33 +147,17 @@ async function actualizar(req, res) {
 async function eliminar(req, res) {
   try {
     const db = req.db;
-
-    const [result] = await db.query(
-      `UPDATE proveedores
-       SET activo = FALSE
-       WHERE id = ?`,
-      [req.params.id]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        error: 'Proveedor no encontrado'
-      });
-    }
-
-    res.json({
-      mensaje: 'Proveedor desactivado'
-    });
-
+    const [result] = await db.query('DELETE FROM proveedores WHERE id = ?', [req.params.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Proveedor no encontrado' });
+    return res.json({ mensaje: 'Proveedor eliminado definitivamente' });
   } catch (err) {
-    console.error(err);
-
-    res.status(500).json({
-      error: 'Error al eliminar proveedor'
-    });
+    console.error('Error eliminando proveedor:', err);
+    if (err.code === 'ER_ROW_IS_REFERENCED_2' || err.code === 'ER_ROW_IS_REFERENCED') {
+      return res.status(409).json({ error: 'No se puede eliminar este proveedor porque tiene compras, artículos u otros movimientos asociados. Se debe conservar para el historial.' });
+    }
+    return res.status(500).json({ error: 'Error al eliminar proveedor' });
   }
 }
-
 
 module.exports = {
   listar,

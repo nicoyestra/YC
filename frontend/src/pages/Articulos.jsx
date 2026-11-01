@@ -47,7 +47,6 @@ export default function Articulos() {
   const [filasImportacion, setFilasImportacion] = useState([]);
   const [resumenImportacion, setResumenImportacion] = useState('');
   const [procesandoImportacion, setProcesandoImportacion] = useState(false);
-  const [modoPruebaImportacion, setModoPruebaImportacion] = useState(true);
 
   const buscadorRef = useRef(null);
   const buscadorCodigoRef = useRef(null);
@@ -407,7 +406,7 @@ export default function Articulos() {
           Caracteristicas: String(get('Caracteristicas', 'Observaciones', 'Carroceria', 'Compatibilidades') || '').trim(),
           precio_neto: Number(String(precio).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')),
           IVA_pct: Number(get('IVA pct', 'IVA') || 21),
-          origen: String(get('Origen') || (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo CHM'))
+          origen: String(get('Origen') || (tipo === 'oferta' ? 'Lista de descuentos' : 'Catálogo general'))
         };
       }).filter((x) => x.codigo && x.nombre && Number.isFinite(x.precio_neto) && x.precio_neto >= 0);
       if (!filas.length) throw new Error(`No encontré filas válidas en la hoja "${preferida}". Usá el archivo preparado para YC System, con columnas de código, descripción y precio neto.`);
@@ -433,8 +432,7 @@ export default function Articulos() {
     setProcesandoImportacion(true);
     setError('');
     try {
-      const filasParaEnviar = modoPruebaImportacion ? filasImportacion.slice(0, 5) : filasImportacion;
-      const { data } = await api.post('/productos/importar', { tipo: tipoImportacion, filas: filasParaEnviar });
+      const { data } = await api.post('/productos/importar', { tipo: tipoImportacion, filas: filasImportacion });
       setResumenImportacion(`${data.mensaje}: ${data.creados} nuevos, ${data.actualizados} existentes, ${data.ofertas_guardadas} precios de oferta guardados y ${data.omitidas} filas omitidas. El stock no se modificó.`);
       setFilasImportacion([]);
       setArchivoImportacion(null);
@@ -443,6 +441,18 @@ export default function Articulos() {
       setError(err.response?.data?.detalle || err.response?.data?.error || 'Falló la importación.');
     } finally {
       setProcesandoImportacion(false);
+    }
+  }
+
+  async function eliminarArticulo(producto) {
+    if (!window.confirm(`¿Eliminar el artículo ${producto.sku || producto.nombre}? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api.delete(`/productos/${producto.id}`);
+      await cargarProductos(busqueda);
+      await cargarPreciosOferta();
+      setError('');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo eliminar el artículo. Puede tener movimientos asociados.');
     }
   }
 
@@ -528,8 +538,8 @@ export default function Articulos() {
                 setTipoImportacion(tipo);
                 if (archivoImportacion) prepararArchivoImportacion(archivoImportacion, tipo);
               }}>
-                <option value="catalogo">Catálogo habitual CHM</option>
-                <option value="oferta">Oferta FUYAO (precio separado)</option>
+                <option value="catalogo">Catálogo general</option>
+                <option value="oferta">Lista de descuentos (precio separado)</option>
               </select>
             </div>
             <div style={{ minWidth: 260, flex: 1 }}>
@@ -540,10 +550,6 @@ export default function Articulos() {
           {resumenImportacion && <p style={{ marginTop: 12 }}>{resumenImportacion}</p>}
           {filasImportacion.length > 0 && (
             <>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-                <input type="checkbox" checked={modoPruebaImportacion} onChange={(e) => setModoPruebaImportacion(e.target.checked)} />
-                Modo de prueba: importar solamente los primeros 5 artículos
-              </label>
               <div style={{ overflowX: 'auto', marginTop: 12 }}>
                 <table>
                   <thead><tr><th>Código</th><th>Artículo</th><th>Precio neto</th><th>IVA %</th></tr></thead>
@@ -556,9 +562,9 @@ export default function Articulos() {
                   </tbody>
                 </table>
               </div>
-              <p>Vista previa de hasta 8 filas. {modoPruebaImportacion ? `Modo de prueba: se enviarán ${Math.min(5, filasImportacion.length)} artículos.` : `Se enviarán ${filasImportacion.length} códigos únicos.`} No se cargarán unidades en stock.</p>
+              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. No se cargarán unidades en stock.</p>
               <button type="button" className="boton" onClick={ejecutarImportacion} disabled={procesandoImportacion}>
-                {procesandoImportacion ? 'Importando...' : `Confirmar importación (${modoPruebaImportacion ? Math.min(5, filasImportacion.length) : filasImportacion.length})`}
+                {procesandoImportacion ? 'Importando...' : `Confirmar importación (${filasImportacion.length})`}
               </button>
             </>
           )}
@@ -1063,6 +1069,7 @@ export default function Articulos() {
                       >
                         Editar
                       </button>
+                      <button type="button" className="boton boton-secundario" onClick={() => eliminarArticulo(producto)}>Eliminar</button>
                     </div>
                   </td>
                 </tr>
@@ -1107,7 +1114,7 @@ export default function Articulos() {
               <div style={{ overflowX: 'auto' }}><table style={{ width: '100%' }}><thead><tr><th>Proveedor</th><th>Tipo de precio</th><th>Neto</th><th>Total con IVA</th><th>Comparación</th></tr></thead><tbody>
                 {opciones.map((o, i) => <tr key={`${o.proveedor}-${o.tipo}-${i}`}><td><strong>{o.proveedor}</strong></td><td>{o.tipo}</td><td>{fmt(o.neto)}</td><td><strong>{fmt(o.total)}</strong></td><td>{minimo !== null && o.total === minimo ? <strong style={{ color: '#15803d' }}>Menor precio</strong> : minimo !== null ? fmt(o.total - minimo) + ' más caro' : 'Sin otro precio para comparar'}</td></tr>)}
               </tbody></table></div>
-              {ofertas.length === 0 && <p style={{ marginTop: 16, color: '#b45309' }}>Este artículo no tiene una oferta vinculada. Probá buscar el código en la lista de ofertas o verificá que coincida con el código CHM.</p>}
+              {ofertas.length === 0 && <p style={{ marginTop: 16, color: '#b45309' }}>Este artículo no tiene una oferta vinculada. Probá buscar el código en la lista de ofertas o verificá que coincida con el código del proveedor.</p>}
             </section>
           </div>
         );
