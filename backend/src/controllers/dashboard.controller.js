@@ -301,7 +301,6 @@ async function resumen(req, res) {
         FROM stock s
         JOIN productos p ON p.id = s.producto_id
         WHERE s.cantidad > 0
-          AND p.activo = 1
       `),
 
       db.query(`
