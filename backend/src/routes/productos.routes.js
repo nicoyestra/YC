@@ -13,6 +13,7 @@ router.get('/codigo/:codigo', ctrl.buscarPorCodigoBarras);
 router.get('/:id', ctrl.obtener);
 router.post('/', permitirRoles('admin', 'inventario', 'compras'), ctrl.crear);
 router.put('/:id', permitirRoles('admin', 'inventario', 'compras'), ctrl.actualizar);
+router.patch('/:id/precio-venta', permitirRoles('admin', 'inventario'), ctrl.actualizarPrecioVenta);
 router.delete('/:id', permitirRoles('admin', 'inventario'), ctrl.eliminar);
 
 module.exports = router;

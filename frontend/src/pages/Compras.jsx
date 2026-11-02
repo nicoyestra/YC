@@ -54,6 +54,24 @@ export default function Compras() {
     items: [{ ...ITEM_VACIO }],
   });
 
+  function obtenerPrecioCompraConIVA(producto, proveedorId) {
+    const oferta = preciosOfertaCompra.find((o) =>
+      Number(o.producto_id) === Number(producto.id) &&
+      Number(o.proveedor_id) === Number(proveedorId)
+    );
+
+    if (oferta) {
+      const neto = Number(oferta.precio_neto || 0);
+      const iva = Number(oferta.iva_porcentaje ?? producto.iva_porcentaje ?? 21);
+      return Math.round(neto * (1 + iva / 100) * 100) / 100;
+    }
+
+    const costoNeto = Number(producto.precio_costo || 0);
+    const ivaHabitual = Number(producto.iva_porcentaje ?? 21);
+    return Math.round(costoNeto * (1 + ivaHabitual / 100) * 100) / 100;
+  }
+
+
   async function eliminarProveedor(proveedor) {
     if (!window.confirm(`¿Eliminar el proveedor ${proveedor.nombre}? Si tiene compras o artículos asociados, el sistema protegerá el historial.`)) return;
     try {
@@ -183,14 +201,10 @@ export default function Compras() {
         precio_unitario: '',
       };
     } else {
-      const oferta = preciosOfertaCompra.find((o) =>
-        Number(o.producto_id) === Number(producto.id) &&
-        Number(o.proveedor_id) === Number(nuevaOrden.proveedor_id)
-      );
       items[index] = {
         ...items[index],
         producto_id: producto.id,
-        precio_unitario: oferta ? oferta.precio_neto : (producto.precio_costo ?? ''),
+        precio_unitario: obtenerPrecioCompraConIVA(producto, nuevaOrden.proveedor_id),
       };
     }
 
@@ -204,13 +218,9 @@ export default function Compras() {
     const items = nuevaOrden.items.map((item) => {
       const producto = productos.find((p) => Number(p.id) === Number(item.producto_id));
       if (!producto) return item;
-      const oferta = preciosOfertaCompra.find((o) =>
-        Number(o.producto_id) === Number(producto.id) &&
-        Number(o.proveedor_id) === Number(proveedorId)
-      );
       return {
         ...item,
-        precio_unitario: oferta ? oferta.precio_neto : (producto.precio_costo ?? ''),
+        precio_unitario: obtenerPrecioCompraConIVA(producto, proveedorId),
       };
     });
     setNuevaOrden({ ...nuevaOrden, proveedor_id: proveedorId, items });

@@ -530,7 +530,7 @@ export default function Articulos() {
       setResumenImportacion(`${data.mensaje}: ${data.creados} nuevos, ${data.actualizados} existentes, ${data.ofertas_guardadas} precios de oferta guardados y ${data.omitidas} filas omitidas. El stock no se modificó.`);
       setFilasImportacion([]);
       setArchivoImportacion(null);
-      await cargarProductos();
+      await Promise.all([cargarProductos(), cargarPreciosOferta()]);
     } catch (err) {
       setError(err.response?.data?.detalle || err.response?.data?.error || 'Falló la importación.');
     } finally {

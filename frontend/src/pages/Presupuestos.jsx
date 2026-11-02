@@ -154,8 +154,10 @@ export default function Presupuestos() {
       items[index] = {
         ...items[index],
         producto_id: producto.id,
-        precio_unitario: producto.precio_venta ?? 0,
-        iva_porcentaje: producto.iva_porcentaje ?? 21,
+        // El precio del presupuesto se carga manualmente (incluye mano de obra).
+        // No copiar precios de venta ni costos desde el catálogo.
+        precio_unitario: '',
+        iva_porcentaje: 21,
       };
     }
     setNuevo({ ...nuevo, items });

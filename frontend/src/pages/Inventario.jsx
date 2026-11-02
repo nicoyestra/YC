@@ -6,6 +6,10 @@ export default function Inventario() {
   const [productos, setProductos] = useState([]);
   const [almacenes, setAlmacenes] = useState([]);
   const [stockPorAlmacen, setStockPorAlmacen] = useState([]);
+  const [preciosOferta, setPreciosOferta] = useState([]);
+  const [editandoPrecioId, setEditandoPrecioId] = useState(null);
+  const [precioVentaEditado, setPrecioVentaEditado] = useState('');
+  const [guardandoPrecio, setGuardandoPrecio] = useState(false);
 
   const [busqueda, setBusqueda] = useState('');
   const [sugerencias, setSugerencias] = useState([]);
@@ -38,6 +42,26 @@ export default function Inventario() {
       setAlmacenes(data);
     } catch {
       setError('No se pudieron cargar los almacenes');
+    }
+  }
+
+  async function cargarPreciosOferta() {
+    try {
+      const { data } = await api.get('/productos/precios-oferta');
+      setPreciosOferta(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('No se pudieron cargar los precios de oferta', err);
+      setPreciosOferta([]);
+    }
+  }
+
+  async function cargarPreciosOferta() {
+    try {
+      const { data } = await api.get('/productos/precios-oferta');
+      setPreciosOferta(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('No se pudieron cargar los precios de oferta', err);
+      setPreciosOferta([]);
     }
   }
 
@@ -80,6 +104,7 @@ export default function Inventario() {
     buscarProductos();
     cargarAlmacenes();
     cargarStockPorAlmacen();
+    cargarPreciosOferta();
   }, []);
 
   useEffect(() => {
@@ -238,6 +263,100 @@ export default function Inventario() {
     }
   }
 
+  function obtenerPrecioCompra(producto) {
+    const ivaHabitual = Number(producto.iva_porcentaje ?? 21);
+    const costoHabitual = Number(producto.precio_costo || 0);
+
+    if (costoHabitual > 0) {
+      return {
+        neto: costoHabitual,
+        iva: ivaHabitual,
+        total: costoHabitual * (1 + ivaHabitual / 100),
+        origen: 'Costo habitual',
+      };
+    }
+
+    const ofertas = preciosOferta
+      .filter((oferta) => Number(oferta.producto_id) === Number(producto.id))
+      .map((oferta) => {
+        const neto = Number(oferta.precio_neto || 0);
+        const iva = Number(oferta.iva_porcentaje ?? ivaHabitual);
+        return {
+          neto,
+          iva,
+          total: neto * (1 + iva / 100),
+          origen: oferta.proveedor_nombre || oferta.origen || 'Oferta proveedor',
+        };
+      })
+      .filter((oferta) => oferta.neto > 0)
+      .sort((a, b) => a.total - b.total);
+
+    return ofertas[0] || {
+      neto: 0,
+      iva: ivaHabitual,
+      total: 0,
+      origen: 'Sin precio',
+    };
+  }
+
+  const productosConStock = productos.filter(
+    (producto) => Number(producto.stock_total || 0) > 0
+  );
+
+  function obtenerPrecioCompra(producto) {
+    const ivaHabitual = Number(producto.iva_porcentaje ?? 21);
+    const costoHabitual = Number(producto.precio_costo || 0);
+
+    if (costoHabitual > 0) {
+      return {
+        total: costoHabitual * (1 + ivaHabitual / 100),
+        iva: ivaHabitual,
+        origen: 'Costo habitual',
+      };
+    }
+
+    const ofertas = preciosOferta
+      .filter((oferta) => Number(oferta.producto_id) === Number(producto.id))
+      .map((oferta) => {
+        const neto = Number(oferta.precio_neto || 0);
+        const iva = Number(oferta.iva_porcentaje ?? ivaHabitual);
+        return {
+          total: neto * (1 + iva / 100),
+          iva,
+          origen: oferta.proveedor_nombre || oferta.origen || 'Oferta proveedor',
+        };
+      })
+      .filter((oferta) => oferta.total > 0)
+      .sort((a, b) => a.total - b.total);
+
+    return ofertas[0] || { total: 0, iva: ivaHabitual, origen: 'Sin precio' };
+  }
+
+  async function guardarPrecioVenta(productoId) {
+    const valor = Number(String(precioVentaEditado).replace(',', '.'));
+    if (!Number.isFinite(valor) || valor < 0) {
+      setError('Ingresá un precio de venta válido.');
+      return;
+    }
+    setGuardandoPrecio(true);
+    setError('');
+    try {
+      await api.patch(`/productos/${productoId}/precio-venta`, { precio_venta: valor });
+      setProductos((actuales) => actuales.map((producto) =>
+        Number(producto.id) === Number(productoId)
+          ? { ...producto, precio_venta: valor }
+          : producto
+      ));
+      setEditandoPrecioId(null);
+      setPrecioVentaEditado('');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo guardar el precio de venta.');
+    } finally {
+      setGuardandoPrecio(false);
+    }
+  }
+
+  
   function exportarInventario() {
     const datos = productos.map((producto) => {
       const stockDetalle =
@@ -259,12 +378,10 @@ export default function Inventario() {
           producto.stock_total || 0
         ),
         ...datosStock,
-        'Precio de compra': Number(
-          producto.precio_costo || 0
-        ),
-        'IVA %': Number(
-          producto.iva_porcentaje || 0
-        ),
+        'Precio de compra neto': obtenerPrecioCompra(producto).neto,
+        'IVA %': obtenerPrecioCompra(producto).iva,
+        'Precio de compra con IVA': obtenerPrecioCompra(producto).total,
+        'Origen del precio': obtenerPrecioCompra(producto).origen,
         'Precio de venta': Number(
           producto.precio_venta || 0
         ),
@@ -432,7 +549,7 @@ export default function Inventario() {
                 <th>Artículo / Descripción</th>
                 <th>Proveedor</th>
                 <th>Stock</th>
-                <th>Precio compra (s/IVA)</th>
+                <th>Precio compra (con IVA)</th>
                 <th>IVA</th>
                 <th>Precio venta</th>
                 <th>Acciones</th>
@@ -440,7 +557,7 @@ export default function Inventario() {
             </thead>
 
             <tbody>
-              {productos.length === 0 &&
+              {productosConStock.length === 0 &&
                 !buscando && (
                   <tr>
                     <td
@@ -455,7 +572,7 @@ export default function Inventario() {
                   </tr>
                 )}
 
-              {productos.map((p) => {
+              {productosConStock.map((p) => {
                 const stockDetalle =
                   obtenerStockProducto(p.id);
 
@@ -546,14 +663,21 @@ export default function Inventario() {
                       </td>
 
                       <td>
-                        $
-                        {Number(
-                          p.precio_costo || 0
-                        ).toFixed(2)}
+                        {(() => {
+                          const precio = obtenerPrecioCompra(p);
+                          return (
+                            <div>
+                              <strong>${precio.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
+                                {precio.origen}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       <td>
-                        {p.iva_porcentaje}%
+                        {obtenerPrecioCompra(p).iva}%
                       </td>
 
                       <td>
@@ -608,9 +732,46 @@ export default function Inventario() {
                           >
                             Transferir
                           </button>
+
+                          <button
+                            type="button"
+                            className="boton boton-secundario"
+                            onClick={() => {
+                              setEditandoPrecioId(editandoPrecioId === p.id ? null : p.id);
+                              setPrecioVentaEditado(String(p.precio_venta ?? 0));
+                            }}
+                          >
+                            {editandoPrecioId === p.id ? 'Cerrar precio' : 'Editar venta'}
+                          </button>
                         </div>
                       </td>
                     </tr>
+
+                    {editandoPrecioId === p.id && (
+                      <tr>
+                        <td colSpan={8}>
+                          <form
+                            onSubmit={(e) => { e.preventDefault(); guardarPrecioVenta(p.id); }}
+                            style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap', padding: 10 }}
+                          >
+                            <div style={{ minWidth: 220 }}>
+                              <label>Nuevo precio de venta</label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={precioVentaEditado}
+                                onChange={(e) => setPrecioVentaEditado(e.target.value)}
+                                required
+                              />
+                            </div>
+                            <button className="boton" type="submit" disabled={guardandoPrecio}>
+                              {guardandoPrecio ? 'Guardando...' : 'Guardar precio'}
+                            </button>
+                          </form>
+                        </td>
+                      </tr>
+                    )}
 
                     {mostrarMovimiento === p.id && (
                       <tr>

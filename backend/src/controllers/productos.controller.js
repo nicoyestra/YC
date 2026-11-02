@@ -320,6 +320,27 @@ async function actualizar(req, res) {
 }
 
 
+
+async function actualizarPrecioVenta(req, res) {
+  try {
+    const precio = Number(req.body?.precio_venta);
+    if (!Number.isFinite(precio) || precio < 0) {
+      return res.status(400).json({ error: 'El precio de venta debe ser un número válido mayor o igual a cero.' });
+    }
+    const [result] = await req.db.query(
+      'UPDATE productos SET precio_venta = ? WHERE id = ?',
+      [precio, req.params.id]
+    );
+    if (!result.affectedRows) {
+      return res.status(404).json({ error: 'Artículo no encontrado.' });
+    }
+    return res.json({ mensaje: 'Precio de venta actualizado.', precio_venta: precio });
+  } catch (err) {
+    console.error('Error actualizando precio de venta:', err);
+    return res.status(500).json({ error: 'No se pudo actualizar el precio de venta.' });
+  }
+}
+
 async function eliminar(req, res) {
   try {
     const db = req.db;
@@ -567,6 +588,7 @@ module.exports = {
   buscarPorCodigoBarras,
   crear,
   actualizar,
+  actualizarPrecioVenta,
   eliminar,
   productosBajoStock,
   importarCatalogo,
