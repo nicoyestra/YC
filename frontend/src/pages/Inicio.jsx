@@ -79,6 +79,17 @@ export default function Inicio() {
         {tarjetas.map(t => <button key={t.etiqueta} className={`kpi-card ${t.clase}`} onClick={() => navigate(t.ruta)}><span className="kpi-icon">{t.icono}</span><small>{t.etiqueta}</small><strong>{t.valor}</strong><p>{t.detalle}</p></button>)}
       </section>
 
+      <section className="rentabilidad-simple" aria-label="Resumen de mercadería y resultado">
+        <article className="rentabilidad-simple-card stock">
+          <span>Mercadería en stock</span>
+          <strong>{dinero(data?.resumenEconomico?.valorMercaderiaStock)}</strong>
+        </article>
+        <article className="rentabilidad-simple-card resultado">
+          <span>Te queda de los trabajos este mes</span>
+          <strong>{dinero(data?.resumenEconomico?.resultadoTrabajosMes)}</strong>
+        </article>
+      </section>
+
       <section className="dashboard-main-grid">
         {(rol === 'admin' || rol === 'ventas') && (
           <article className="tarjeta dashboard-widget chart-widget">

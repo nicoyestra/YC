@@ -1,3 +1,28 @@
+
+const esquemasCostoHistorico = new WeakMap();
+
+async function asegurarCostoHistorico(db, ejecutor = db) {
+  if (!esquemasCostoHistorico.has(db)) {
+    const promesa = (async () => {
+      const [columnas] = await ejecutor.query(
+        "SHOW COLUMNS FROM detalle_ordenes_venta LIKE 'costo_unitario'"
+      );
+      if (!columnas.length) {
+        await ejecutor.query(
+          "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario DECIMAL(14,2) NULL AFTER precio_unitario"
+        );
+      }
+    })();
+    esquemasCostoHistorico.set(db, promesa);
+  }
+  try {
+    await esquemasCostoHistorico.get(db);
+  } catch (error) {
+    esquemasCostoHistorico.delete(db);
+    throw error;
+  }
+}
+
 async function resumen(req, res) {
   try {
     const db = req.db;
@@ -7,6 +32,8 @@ async function resumen(req, res) {
         error: 'No se pudo determinar la base de datos de la empresa',
       });
     }
+
+    await asegurarCostoHistorico(db);
 
     const [
       [[ventasHoy]],
@@ -21,6 +48,8 @@ async function resumen(req, res) {
       [ventas30Dias],
       [topProductos],
       [actividadReciente],
+      [[valorMercaderiaStock]],
+      [[resultadoTrabajosMes]],
     ] = await Promise.all([
       db.query(`
         SELECT COUNT(*) cantidad,
@@ -244,6 +273,28 @@ async function resumen(req, res) {
         ORDER BY fecha DESC
         LIMIT 10
       `),
+
+      db.query(`
+        SELECT COALESCE(SUM(s.cantidad * p.precio_costo), 0) AS total
+        FROM stock s
+        JOIN productos p ON p.id = s.producto_id
+        WHERE s.cantidad > 0
+          AND p.activo = 1
+      `),
+
+      db.query(`
+        SELECT
+          COALESCE(SUM(
+            d.subtotal -
+            (d.cantidad * COALESCE(d.costo_unitario, p.precio_costo, 0))
+          ), 0) AS total
+        FROM detalle_ordenes_venta d
+        JOIN ordenes_venta ov ON ov.id = d.orden_venta_id
+        JOIN productos p ON p.id = d.producto_id
+        WHERE ov.estado IN ('confirmada','entregada')
+          AND YEAR(ov.fecha) = YEAR(CURDATE())
+          AND MONTH(ov.fecha) = MONTH(CURDATE())
+      `),
     ]);
 
     res.json({
@@ -261,6 +312,10 @@ async function resumen(req, res) {
       ventas30Dias,
       topProductos,
       actividadReciente,
+      resumenEconomico: {
+        valorMercaderiaStock: Number(valorMercaderiaStock?.total || 0),
+        resultadoTrabajosMes: Number(resultadoTrabajosMes?.total || 0),
+      },
       generadoEn: new Date().toISOString(),
     });
   } catch (err) {

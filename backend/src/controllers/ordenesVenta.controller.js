@@ -5,6 +5,32 @@ const { masterPool } = require('../config/db');
 
 // Convierte el ID global del inicio de sesión al ID local de usuarios de la empresa.
 // El token usa el ID de yc_master.accesos; las órdenes y movimientos usan usuarios.id local.
+
+const esquemasCostoHistorico = new WeakMap();
+
+async function asegurarCostoHistorico(db, ejecutor = db) {
+  if (!esquemasCostoHistorico.has(db)) {
+    const promesa = (async () => {
+      const [columnas] = await ejecutor.query(
+        "SHOW COLUMNS FROM detalle_ordenes_venta LIKE 'costo_unitario'"
+      );
+      if (!columnas.length) {
+        await ejecutor.query(
+          "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario DECIMAL(14,2) NULL AFTER precio_unitario"
+        );
+      }
+    })();
+    esquemasCostoHistorico.set(db, promesa);
+  }
+  try {
+    await esquemasCostoHistorico.get(db);
+  } catch (error) {
+    esquemasCostoHistorico.delete(db);
+    throw error;
+  }
+}
+
+
 async function obtenerUsuarioLocalId(conexion, usuario) {
   let email = usuario?.email || null;
   const empresaId = usuario?.empresa_id;
@@ -562,6 +588,7 @@ async function confirmar(req, res) {
   const conexion = await db.getConnection();
 
   try {
+    await asegurarCostoHistorico(db, conexion);
     const ordenId =
       req.params.id;
 
@@ -599,6 +626,17 @@ async function confirmar(req, res) {
           `La orden ya está en estado "${orden.estado}"`
       });
     }
+
+    // Congela el costo de cada artículo al momento de confirmar la venta.
+    // Así los cambios futuros del catálogo no alteran la rentabilidad histórica.
+    await conexion.query(
+      `UPDATE detalle_ordenes_venta d
+       JOIN productos p ON p.id = d.producto_id
+       SET d.costo_unitario = p.precio_costo
+       WHERE d.orden_venta_id = ?
+         AND d.costo_unitario IS NULL`,
+      [ordenId]
+    );
 
     const [items] =
       await conexion.query(

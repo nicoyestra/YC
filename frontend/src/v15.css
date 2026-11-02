@@ -224,3 +224,12 @@
       "activity";
   }
 }
+
+/* Resumen económico simple del inicio */
+.rentabilidad-simple { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.rentabilidad-simple-card { display:flex; flex-direction:column; gap:9px; padding:22px 24px; min-height:118px; border:1px solid #e2e8f0; border-radius:18px; background:#fff; box-shadow:0 8px 24px rgba(15,23,42,.05); }
+.rentabilidad-simple-card span { color:#64748b; font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+.rentabilidad-simple-card strong { color:#172033; font-size:27px; letter-spacing:-.04em; }
+.rentabilidad-simple-card.resultado strong { color:#15803d; }
+.rentabilidad-simple-card small { color:#64748b; font-size:12px; }
+@media (max-width: 700px) { .rentabilidad-simple { grid-template-columns:1fr; } }
