@@ -473,10 +473,10 @@ async function importarCatalogo(req, res) {
         codigo, clave, descripcion,
         marca: txt(f.Marca), modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
-        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual CHM')),
-        iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21,
+        precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual')),
         proveedorNombre: txt(f.Proveedor ?? f.proveedor ?? 'CHM') || 'CHM',
-        precioVentaSugerido: num(f.Precio_venta_sugerido ?? f.precio_venta_sugerido ?? f.precio_venta)
+        precioVentaSugerido: num(f.precio_venta_sugerido ?? f.Precio_venta_sugerido ?? f.precio_venta),
+        iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21
       });
     }
     if (!normalizadas.length) return res.status(400).json({ error: 'No se encontraron filas válidas. Revisá los encabezados y la columna de precio.' });
@@ -487,11 +487,17 @@ async function importarCatalogo(req, res) {
     let creados = 0, actualizados = 0, ofertas = 0;
     try {
       for (const f of normalizadas) {
-        const [provRows] = await cx.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', [f.proveedorNombre]);
+        const [provRows] = await cx.query(
+          'SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1',
+          [f.proveedorNombre]
+        );
         let proveedorId;
         if (provRows.length) proveedorId = provRows[0].id;
         else {
-          const [pr] = await cx.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', [f.proveedorNombre]);
+          const [pr] = await cx.query(
+            'INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)',
+            [f.proveedorNombre]
+          );
           proveedorId = pr.insertId;
         }
         const sku = f.codigo.slice(0, 50);

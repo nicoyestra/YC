@@ -530,8 +530,8 @@ export default function Articulos() {
           Modelo: String(get('Modelo', 'Modelo descripcion') || '').trim(),
           Caracteristicas: detalles,
           precio_neto: convertirPrecioExcel(precioOriginal),
-          precio_venta_sugerido: convertirPrecioExcel(get('Precio venta sugerido', 'Precio sugerido', 'Precio de venta')),
-          Proveedor: String(get('Proveedor') || 'CHM').trim(),
+          precio_venta_sugerido: convertirPrecioExcel(get('Precio venta sugerido', 'Precio sugerido', 'Precio sugerido IVA inc', 'Precio sugerido IVA incluido')),
+          Proveedor: String(get('Proveedor', 'proveedor') || 'CHM').trim(),
           IVA_pct: Number(get('IVA pct', 'IVA') || 21),
           origen: String(get('Origen') || (tipo === 'oferta' ? `Lista de descuentos - ${archivo.name}` : 'Catálogo general')),
         };
