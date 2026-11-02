@@ -8,6 +8,7 @@ export default function NotificationCenter() {
   const [abierto, setAbierto] = useState(false);
   const [datos, setDatos] = useState({ items: [], noLeidas: 0 });
   const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState('');
   const contenedor = useRef(null);
   const navigate = useNavigate();
 
@@ -47,8 +48,13 @@ export default function NotificationCenter() {
   }
 
   async function leerTodas() {
-    await api.post('/notificaciones/leer-todas');
-    cargar();
+    try {
+      setError('');
+      await api.post('/notificaciones/leer-todas');
+      await cargar();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudieron marcar como leídas.');
+    }
   }
 
   return (
@@ -70,6 +76,7 @@ export default function NotificationCenter() {
             {datos.noLeidas > 0 && <button type="button" onClick={leerTodas}>Marcar todas</button>}
           </div>
 
+          {error && <div className="notification-empty" role="alert" style={{ color: '#b91c1c' }}>{error}</div>}
           <div className="notification-list">
             {cargando && datos.items.length === 0 ? (
               <div className="notification-empty">Cargando alertas…</div>

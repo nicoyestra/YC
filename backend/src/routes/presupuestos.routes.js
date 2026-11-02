@@ -10,5 +10,6 @@ router.get('/:id', presupuestosCtrl.obtener);
 router.post('/', permitirRoles('admin', 'ventas'), presupuestosCtrl.crear);
 router.put('/:id', permitirRoles('admin', 'ventas'), presupuestosCtrl.actualizar);
 router.patch('/:id/estado', permitirRoles('admin', 'ventas'), presupuestosCtrl.cambiarEstado);
+router.delete('/:id', permitirRoles('admin', 'ventas'), presupuestosCtrl.eliminar);
 
 module.exports = router;

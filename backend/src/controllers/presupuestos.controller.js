@@ -118,7 +118,7 @@ function calcularItems(items) {
       );
 
       const ivaPorcentaje = numero(
-        item.iva_porcentaje ?? 21,
+        item.iva_porcentaje ?? 0,
         0
       );
 
@@ -818,10 +818,74 @@ async function cambiarEstado(req, res) {
 }
 
 
+// ELIMINAR PRESUPUESTO
+async function eliminar(req, res) {
+  const db = req.db;
+  const conexion = await db.getConnection();
+  let transaccionIniciada = false;
+
+  try {
+    const presupuestoId = Number(req.params.id);
+    if (!Number.isInteger(presupuestoId) || presupuestoId <= 0) {
+      return res.status(400).json({ error: 'Presupuesto inválido' });
+    }
+
+    await conexion.beginTransaction();
+    transaccionIniciada = true;
+
+    const [rows] = await conexion.query(
+      `SELECT id, numero, orden_venta_id
+       FROM presupuestos
+       WHERE id = ?
+       FOR UPDATE`,
+      [presupuestoId]
+    );
+
+    if (!rows[0]) {
+      await conexion.rollback();
+      transaccionIniciada = false;
+      return res.status(404).json({ error: 'Presupuesto no encontrado' });
+    }
+
+    if (rows[0].orden_venta_id) {
+      await conexion.rollback();
+      transaccionIniciada = false;
+      return res.status(409).json({
+        error: 'No se puede eliminar: el presupuesto está vinculado a una orden de venta.'
+      });
+    }
+
+    await conexion.query(
+      'DELETE FROM presupuestos WHERE id = ?',
+      [presupuestoId]
+    );
+
+    await conexion.commit();
+    transaccionIniciada = false;
+
+    return res.json({
+      ok: true,
+      mensaje: `Presupuesto ${rows[0].numero} eliminado`
+    });
+  } catch (err) {
+    if (transaccionIniciada) {
+      try { await conexion.rollback(); } catch (rollbackError) {
+        console.error('Error al revertir eliminación de presupuesto:', rollbackError);
+      }
+    }
+    console.error('Error al eliminar presupuesto:', err);
+    return res.status(500).json({ error: 'Error al eliminar el presupuesto' });
+  } finally {
+    conexion.release();
+  }
+}
+
+
 module.exports = {
   listar,
   obtener,
   crear,
   actualizar,
-  cambiarEstado
+  cambiarEstado,
+  eliminar
 };

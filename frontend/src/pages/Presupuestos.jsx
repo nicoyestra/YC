@@ -285,6 +285,25 @@ export default function Presupuestos() {
     cargar(estado);
   }
 
+  async function eliminarPresupuesto(presupuesto) {
+    const confirmado = window.confirm(
+      `¿Eliminar el presupuesto ${presupuesto.numero}? Esta acción no se puede deshacer.`
+    );
+    if (!confirmado) return;
+
+    try {
+      setError('');
+      await api.delete(`/presupuestos/${presupuesto.id}`);
+      if (detalleAbierto === presupuesto.id) {
+        setDetalleAbierto(null);
+        setDetalle(null);
+      }
+      await cargar();
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo eliminar el presupuesto');
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -492,6 +511,14 @@ export default function Presupuestos() {
                   <td style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
                     <button type="button" className="boton boton-secundario" onClick={() => verDetalle(presupuesto.id)}>
                       {detalleAbierto === presupuesto.id ? 'Ocultar' : 'Ver detalle'}
+                    </button>
+                    <button
+                      type="button"
+                      className="boton boton-secundario"
+                      onClick={() => eliminarPresupuesto(presupuesto)}
+                      style={{ color: '#b91c1c' }}
+                    >
+                      Eliminar
                     </button>
                     <select
                       aria-label="Cambiar estado"

@@ -1,3 +1,35 @@
+const { masterPool } = require('../config/db');
+
+
+async function obtenerUsuarioLocalId(db, usuario) {
+  let email = usuario?.email || null;
+  if (!email && usuario?.id && usuario?.empresa_id) {
+    const [accesos] = await masterPool.query(
+      'SELECT email FROM accesos WHERE id = ? AND empresa_id = ? LIMIT 1',
+      [usuario.id, usuario.empresa_id]
+    );
+    email = accesos[0]?.email || null;
+  }
+  if (email) {
+    const [rows] = await db.query(
+      'SELECT id FROM usuarios WHERE LOWER(email) = LOWER(?) AND activo = 1 LIMIT 1',
+      [email]
+    );
+    if (rows[0]) return rows[0].id;
+  }
+  const nombre = usuario?.nombre || usuario?.nombre_usuario;
+  if (nombre) {
+    const [rows] = await db.query(
+      'SELECT id FROM usuarios WHERE LOWER(nombre_usuario) = LOWER(?) AND activo = 1 LIMIT 1',
+      [nombre]
+    );
+    if (rows[0]) return rows[0].id;
+  }
+  const error = new Error('No se encontró un usuario local activo para las notificaciones.');
+  error.status = 400;
+  throw error;
+}
+
 function permitidaPorRol(item, rol) {
   if (rol === 'admin') return true;
   return item.roles.includes(rol);
@@ -226,10 +258,11 @@ async function listar(req, res) {
   try {
     const db = req.db;
 
+    const usuarioLocalId = await obtenerUsuarioLocalId(db, req.usuario);
     const items =
       await construirNotificaciones(
         db,
-        req.usuario.id,
+        usuarioLocalId,
         req.usuario.rol
       );
 
@@ -271,6 +304,7 @@ async function marcarLeida(req, res) {
       });
     }
 
+    const usuarioLocalId = await obtenerUsuarioLocalId(db, req.usuario);
     await db.query(
       `INSERT INTO notificaciones_leidas
        (
@@ -281,7 +315,7 @@ async function marcarLeida(req, res) {
        ON DUPLICATE KEY UPDATE
          leida_en = CURRENT_TIMESTAMP`,
       [
-        req.usuario.id,
+        usuarioLocalId,
         clave
       ]
     );
@@ -305,30 +339,22 @@ async function marcarTodas(req, res) {
   try {
     const db = req.db;
 
+    const usuarioLocalId = await obtenerUsuarioLocalId(db, req.usuario);
     const items =
       await construirNotificaciones(
         db,
-        req.usuario.id,
+        usuarioLocalId,
         req.usuario.rol
       );
 
     if (items.length) {
-      const valores =
-        items.map((x) => [
-          req.usuario.id,
-          x.clave
-        ]);
-
+      const placeholders = items.map(() => '(?, ?)').join(', ');
+      const valores = items.flatMap((item) => [usuarioLocalId, item.clave]);
       await db.query(
-        `INSERT INTO notificaciones_leidas
-         (
-           usuario_id,
-           clave
-         )
-         VALUES ?
-         ON DUPLICATE KEY UPDATE
-           leida_en = CURRENT_TIMESTAMP`,
-        [valores]
+        `INSERT INTO notificaciones_leidas (usuario_id, clave)
+         VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE leida_en = CURRENT_TIMESTAMP`,
+        valores
       );
     }
 
