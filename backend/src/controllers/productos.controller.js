@@ -458,14 +458,6 @@ async function importarCatalogo(req, res) {
         'ALTER TABLE precios_oferta_proveedor ADD COLUMN iva_porcentaje DECIMAL(5,2) NOT NULL DEFAULT 21 AFTER precio_neto'
       );
     }
-    const [provRows] = await db.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', ['CHM']);
-    let proveedorId;
-    if (provRows.length) proveedorId = provRows[0].id;
-    else {
-      const [pr] = await db.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', ['CHM']);
-      proveedorId = pr.insertId;
-    }
-
     const vistos = new Set();
     const normalizadas = [];
     let omitidas = 0;
@@ -482,7 +474,9 @@ async function importarCatalogo(req, res) {
         marca: txt(f.Marca), modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
         precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual CHM')),
-        iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21
+        iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21,
+        proveedorNombre: txt(f.Proveedor ?? f.proveedor ?? 'CHM') || 'CHM',
+        precioVentaSugerido: num(f.Precio_venta_sugerido ?? f.precio_venta_sugerido ?? f.precio_venta)
       });
     }
     if (!normalizadas.length) return res.status(400).json({ error: 'No se encontraron filas válidas. Revisá los encabezados y la columna de precio.' });
@@ -493,6 +487,13 @@ async function importarCatalogo(req, res) {
     let creados = 0, actualizados = 0, ofertas = 0;
     try {
       for (const f of normalizadas) {
+        const [provRows] = await cx.query('SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1', [f.proveedorNombre]);
+        let proveedorId;
+        if (provRows.length) proveedorId = provRows[0].id;
+        else {
+          const [pr] = await cx.query('INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)', [f.proveedorNombre]);
+          proveedorId = pr.insertId;
+        }
         const sku = f.codigo.slice(0, 50);
         const nombre = `${f.marca ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
         const descripcionCompleta = [f.modelo && f.modelo !== f.descripcion ? `Modelo: ${f.modelo}` : '', f.detalle].filter(Boolean).join(' | ').slice(0, 60000) || null;
@@ -512,8 +513,8 @@ async function importarCatalogo(req, res) {
           productoId = ex[0].id;
           if (tipo === 'catalogo') {
             await cx.query(
-              'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_costo = ?, iva_porcentaje = ?, activo = TRUE WHERE id = ?',
-              [nombre, descripcionCompleta, proveedorId, f.precio, f.iva, productoId]
+              'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_costo = ?, precio_venta = COALESCE(?, precio_venta), iva_porcentaje = ?, activo = TRUE WHERE id = ?',
+              [nombre, descripcionCompleta, proveedorId, f.precio, f.precioVentaSugerido, f.iva, productoId]
             );
           }
           actualizados++;
@@ -521,8 +522,8 @@ async function importarCatalogo(req, res) {
           const costoInicial = tipo === 'oferta' ? 0 : f.precio;
           const [p] = await cx.query(
             `INSERT INTO productos (sku, nombre, descripcion, proveedor_id, precio_costo, precio_venta, iva_porcentaje, stock_minimo, unidad_medida, activo)
-             VALUES (?, ?, ?, ?, ?, 0, ?, 0, 'unidad', TRUE)`,
-            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, f.iva]
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'unidad', TRUE)`,
+            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, tipo === 'catalogo' ? (f.precioVentaSugerido ?? 0) : 0, f.iva]
           );
           productoId = p.insertId;
           creados++;
