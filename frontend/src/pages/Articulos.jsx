@@ -363,6 +363,47 @@ export default function Articulos() {
   }
 
 
+  function obtenerReferenciaCostoCompra() {
+    const costoNeto = Number(nuevo.precio_costo || 0);
+    const ivaHabitual = Number(nuevo.iva_porcentaje ?? 21);
+
+    if (costoNeto > 0) {
+      return {
+        neto: costoNeto,
+        iva: ivaHabitual,
+        total: costoNeto * (1 + ivaHabitual / 100),
+        origen: 'Costo habitual',
+      };
+    }
+
+    const ofertas = preciosOferta
+      .filter((oferta) => Number(oferta.producto_id) === Number(editandoId))
+      .map((oferta) => {
+        const neto = Number(oferta.precio_neto || 0);
+        const iva = Number(oferta.iva_porcentaje ?? ivaHabitual);
+        return {
+          neto,
+          iva,
+          total: neto * (1 + iva / 100),
+          origen: oferta.proveedor_nombre || oferta.origen || 'Oferta de proveedor',
+          proveedorId: oferta.proveedor_id,
+        };
+      })
+      .filter((oferta) => oferta.neto > 0);
+
+    const ofertaProveedor = ofertas.find(
+      (oferta) => String(oferta.proveedorId || '') === String(nuevo.proveedor_id || '')
+    );
+    const referencia = ofertaProveedor || ofertas.sort((a, b) => a.total - b.total)[0];
+
+    return referencia || {
+      neto: 0,
+      iva: ivaHabitual,
+      total: 0,
+      origen: 'Sin costo ni oferta cargada',
+    };
+  }
+
   function normalizarEncabezado(valor) {
     return String(valor ?? '')
       .normalize('NFD')
@@ -530,7 +571,7 @@ export default function Articulos() {
       setResumenImportacion(`${data.mensaje}: ${data.creados} nuevos, ${data.actualizados} existentes, ${data.ofertas_guardadas} precios de oferta guardados y ${data.omitidas} filas omitidas. El stock no se modificó.`);
       setFilasImportacion([]);
       setArchivoImportacion(null);
-      await Promise.all([cargarProductos(), cargarPreciosOferta()]);
+      await cargarProductos();
     } catch (err) {
       setError(err.response?.data?.detalle || err.response?.data?.error || 'Falló la importación.');
     } finally {
@@ -1034,6 +1075,31 @@ export default function Articulos() {
             </div>
           </div>
 
+          {(() => {
+            const referencia = obtenerReferenciaCostoCompra();
+            return (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: '10px 12px',
+                  border: '1px solid #dbe3ef',
+                  borderRadius: 8,
+                  background: '#f8fafc',
+                  fontSize: 13,
+                }}
+              >
+                <strong>Referencia de costo para definir la venta</strong>
+                <div style={{ marginTop: 5 }}>
+                  {referencia.origen} · Neto: ${referencia.neto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {' '}· IVA {referencia.iva}% · <strong>Con IVA: ${referencia.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                </div>
+                <div style={{ color: '#64748b', marginTop: 3 }}>
+                  Es solo una referencia; no modifica el precio de venta ni el costo guardado.
+                </div>
+              </div>
+            );
+          })()}
+
           <div
             style={{
               display: 'flex',
@@ -1136,7 +1202,7 @@ export default function Articulos() {
                     ) : <span style={{ color: '#6b7280' }}>Sin oferta</span>}
                   </td>
                   <td>
-                    ${Number(producto.precio_venta || 0).toFixed(2)}
+                    ${Number(producto.precio_venta || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   <td>{producto.iva_porcentaje}%</td>
                   <td><button type="button" className="boton boton-secundario" onClick={() => setProductoComparar(producto)}>Comparar proveedores</button></td>

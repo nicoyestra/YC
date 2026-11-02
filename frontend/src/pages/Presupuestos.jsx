@@ -8,7 +8,7 @@ const ITEM_VACIO = {
   cantidad: 1,
   precio_unitario: '',
   descuento_porcentaje: 0,
-  iva_porcentaje: 21,
+  iva_porcentaje: 0,
 };
 
 const ESTADOS = ['borrador', 'enviado', 'aceptado', 'rechazado', 'vencido'];
@@ -31,6 +31,43 @@ function dinero(valor) {
   }).format(Number(valor || 0));
 }
 
+function numeroARS(valor) {
+  return new Intl.NumberFormat('es-AR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(valor || 0));
+}
+
+function referenciaCosto(producto, ofertas) {
+  const costo = Number(producto?.precio_costo || 0);
+  const iva = Number(producto?.iva_porcentaje ?? 21);
+  if (costo > 0) {
+    return {
+      origen: 'Costo habitual',
+      neto: costo,
+      iva,
+      total: costo * (1 + iva / 100),
+    };
+  }
+
+  const candidatas = (ofertas || [])
+    .filter((oferta) => Number(oferta.producto_id) === Number(producto?.id))
+    .map((oferta) => {
+      const neto = Number(oferta.precio_neto || 0);
+      const ivaOferta = Number(oferta.iva_porcentaje ?? iva);
+      return {
+        origen: oferta.proveedor_nombre || oferta.origen || 'Oferta de proveedor',
+        neto,
+        iva: ivaOferta,
+        total: neto * (1 + ivaOferta / 100),
+      };
+    })
+    .filter((oferta) => oferta.neto > 0)
+    .sort((a, b) => a.total - b.total);
+
+  return candidatas[0] || null;
+}
+
 
 function escaparHtml(valor) {
   return String(valor ?? '').replace(/[&<>"']/g, (caracter) => ({
@@ -44,6 +81,7 @@ function imprimirPresupuesto(p) {
   const cliente = p.cliente_nombre || 'Cliente';
   const fecha = String(p.fecha || '').slice(0, 10);
   const valido = p.valido_hasta ? String(p.valido_hasta).slice(0, 10) : 'No especificada';
+  const mostrarIVA = Number(p.impuestos || 0) > 0;
   const filas = (p.detalle || []).map((item) => `
     <tr>
       <td>${escaparHtml(item.sku || item.codigo_barras || '')}</td>
@@ -51,7 +89,7 @@ function imprimirPresupuesto(p) {
       <td class="num">${escaparHtml(item.cantidad)}</td>
       <td class="num">${dinero(item.precio_unitario)}</td>
       <td class="num">${Number(item.descuento_porcentaje || 0)}%</td>
-      <td class="num">${Number(item.iva_porcentaje || 0)}%</td>
+      ${mostrarIVA ? `<td class="num">${Number(item.iva_porcentaje || 0)}%</td>` : ''}
       <td class="num">${dinero(item.total)}</td>
     </tr>`).join('');
   const w = window.open('', '_blank', 'width=900,height=700');
@@ -63,8 +101,8 @@ function imprimirPresupuesto(p) {
   <div class="top"><div class="brand"><h1>${escaparHtml(empresa.nombre_fantasia || empresa.razon_social || 'YC System')}</h1><div class="muted">${empresa.razon_social && empresa.nombre_fantasia ? escaparHtml(empresa.razon_social)+'<br>' : ''}${empresa.cuit ? 'CUIT: '+escaparHtml(empresa.cuit)+'<br>' : ''}${empresa.direccion ? escaparHtml(empresa.direccion)+'<br>' : ''}${empresa.telefono ? 'Tel.: '+escaparHtml(empresa.telefono)+'<br>' : ''}${empresa.email ? escaparHtml(empresa.email) : ''}</div></div><div class="doc"><h2>PRESUPUESTO</h2><strong>${escaparHtml(p.numero || '')}</strong><div class="muted">Fecha: ${escaparHtml(fecha)}<br>Válido hasta: ${escaparHtml(valido)}<br>Estado: ${escaparHtml(p.estado || 'borrador')}</div></div></div>
   <div class="notice">PRESUPUESTO COMERCIAL — NO ES FACTURA NI COMPROBANTE FISCAL</div>
   <div class="parties"><div><h3>Presupuestado para</h3><strong>${escaparHtml(cliente)}</strong><div class="muted">${p.cuit_dni ? 'CUIT/DNI: '+escaparHtml(p.cuit_dni)+'<br>' : ''}${p.direccion ? escaparHtml(p.direccion)+'<br>' : ''}${p.telefono ? 'Tel.: '+escaparHtml(p.telefono)+'<br>' : ''}${p.email ? escaparHtml(p.email) : ''}</div></div><div><h3>Condiciones</h3><div>Validez de la oferta: hasta ${escaparHtml(valido)}</div><div>Los precios y condiciones corresponden a este presupuesto.</div></div></div>
-  <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant.</th><th class="num">Precio unit.</th><th class="num">Desc.</th><th class="num">IVA</th><th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table>
-  <div class="totals"><div><span>Subtotal</span><strong>${dinero(p.subtotal)}</strong></div><div><span>Descuentos</span><strong>− ${dinero(p.descuento_total)}</strong></div><div><span>IVA</span><strong>${dinero(p.impuestos)}</strong></div><div class="grand"><span>TOTAL</span><strong>${dinero(p.total)}</strong></div></div>
+  <table><thead><tr><th>Código</th><th>Descripción</th><th class="num">Cant.</th><th class="num">Precio unit.</th><th class="num">Desc.</th>${mostrarIVA ? '<th class="num">IVA</th>' : ''}<th class="num">Total</th></tr></thead><tbody>${filas}</tbody></table>
+  <div class="totals"><div><span>Subtotal</span><strong>${dinero(p.subtotal)}</strong></div><div><span>Descuentos</span><strong>− ${dinero(p.descuento_total)}</strong></div>${mostrarIVA ? `<div><span>IVA</span><strong>${dinero(p.impuestos)}</strong></div>` : ''}<div class="grand"><span>TOTAL</span><strong>${dinero(p.total)}</strong></div></div>
   ${p.observaciones ? `<div class="notes"><strong>Observaciones y condiciones</strong><br>${escaparHtml(p.observaciones)}</div>` : ''}
   <div class="foot">Este documento es una cotización comercial. No acredita pago ni reemplaza una factura fiscal.</div><script>window.onload=()=>window.print();</script></body></html>`);
   w.document.close();
@@ -87,6 +125,7 @@ export default function Presupuestos() {
   const [presupuestos, setPresupuestos] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [productos, setProductos] = useState([]);
+  const [preciosOferta, setPreciosOferta] = useState([]);
   const [mostrarForm, setMostrarForm] = useState(searchParams.get('nuevo') === '1');
   const [detalleAbierto, setDetalleAbierto] = useState(null);
   const [detalle, setDetalle] = useState(null);
@@ -105,14 +144,16 @@ export default function Presupuestos() {
   async function cargar(estado = filtroEstado) {
     try {
       setError('');
-      const [presRes, cliRes, prodRes] = await Promise.all([
+      const [presRes, cliRes, prodRes, ofertasRes] = await Promise.all([
         api.get('/presupuestos', { params: estado ? { estado } : {} }),
         api.get('/ventas/clientes'),
         api.get('/productos'),
+        api.get('/productos/precios-oferta'),
       ]);
       setPresupuestos(Array.isArray(presRes.data) ? presRes.data : []);
       setClientes(Array.isArray(cliRes.data) ? cliRes.data : []);
       setProductos(Array.isArray(prodRes.data) ? prodRes.data : []);
+      setPreciosOferta(Array.isArray(ofertasRes.data) ? ofertasRes.data : []);
     } catch (err) {
       setError(err.response?.data?.error || 'No se pudieron cargar los presupuestos');
     }
@@ -154,10 +195,12 @@ export default function Presupuestos() {
       items[index] = {
         ...items[index],
         producto_id: producto.id,
-        // El precio del presupuesto se carga manualmente (incluye mano de obra).
-        // No copiar precios de venta ni costos desde el catálogo.
-        precio_unitario: '',
-        iva_porcentaje: 21,
+        // Usar el precio de venta del catálogo si existe. Si no existe,
+        // dejarlo editable y mostrar una referencia interna de costo con IVA.
+        precio_unitario: Number(producto.precio_venta || 0) > 0
+          ? String(producto.precio_venta)
+          : '',
+        iva_porcentaje: 0,
       };
     }
     setNuevo({ ...nuevo, items });
@@ -247,7 +290,7 @@ export default function Presupuestos() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ marginBottom: 4 }}>Presupuestos</h1>
-          <p style={{ color: '#6b7280', marginTop: 0 }}>Cotizaciones con validez, descuentos e IVA por artículo.</p>
+          <p style={{ color: '#6b7280', marginTop: 0 }}>Cotizaciones con precios finales, descuentos y sin IVA discriminado.</p>
         </div>
         <button
           type="button"
@@ -301,6 +344,13 @@ export default function Presupuestos() {
           <h4>Artículos</h4>
           {nuevo.items.map((item, index) => {
             const calculo = calcularItem(item);
+            const productoSeleccionado = productos.find(
+              (producto) => Number(producto.id) === Number(item.producto_id)
+            );
+            const referencia = productoSeleccionado
+              ? referenciaCosto(productoSeleccionado, preciosOferta)
+              : null;
+            const tienePrecioVenta = Number(productoSeleccionado?.precio_venta || 0) > 0;
             return (
               <div key={index} className="presupuesto-item">
                 <div style={{ flex: '3 1 320px' }}>
@@ -324,7 +374,7 @@ export default function Presupuestos() {
                   />
                 </div>
                 <div style={{ flex: '1 1 140px' }}>
-                  <label>Precio unitario</label>
+                  <label>Precio unitario final</label>
                   <input
                     type="number"
                     min="0"
@@ -334,6 +384,19 @@ export default function Presupuestos() {
                     required
                   />
                 </div>
+                {productoSeleccionado && (
+                  <div style={{ flex: '1 1 100%', fontSize: 12, color: '#475569', marginTop: -4 }}>
+                    {tienePrecioVenta ? (
+                      <span>Precio de venta del catálogo cargado automáticamente. Podés modificarlo para contemplar colocación, sensores o calibración.</span>
+                    ) : referencia ? (
+                      <span>
+                        Sin precio de venta cargado. Referencia interna: {referencia.origen} · Neto {dinero(referencia.neto)} · IVA {numeroARS(referencia.iva)}% · Con IVA <strong>{dinero(referencia.total)}</strong>. Ingresá el precio que corresponda al trabajo.
+                      </span>
+                    ) : (
+                      <span>Sin precio de venta ni costo de referencia cargado. El precio unitario queda editable.</span>
+                    )}
+                  </div>
+                )}
                 <div style={{ flex: '1 1 105px' }}>
                   <label>Descuento %</label>
                   <input
@@ -343,17 +406,6 @@ export default function Presupuestos() {
                     step="0.01"
                     value={item.descuento_porcentaje}
                     onChange={(e) => actualizarItem(index, 'descuento_porcentaje', e.target.value)}
-                  />
-                </div>
-                <div style={{ flex: '1 1 90px' }}>
-                  <label>IVA %</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={item.iva_porcentaje}
-                    onChange={(e) => actualizarItem(index, 'iva_porcentaje', e.target.value)}
                   />
                 </div>
                 <div className="presupuesto-item-total">
@@ -386,7 +438,6 @@ export default function Presupuestos() {
           <div className="presupuesto-totales">
             <div><span>Subtotal</span><strong>{dinero(totales.subtotal)}</strong></div>
             <div><span>Descuentos</span><strong>- {dinero(totales.descuento)}</strong></div>
-            <div><span>IVA</span><strong>{dinero(totales.impuestos)}</strong></div>
             <div className="presupuesto-total-final"><span>Total</span><strong>{dinero(totales.total)}</strong></div>
           </div>
 
@@ -459,7 +510,7 @@ export default function Presupuestos() {
                         <div><strong>{detalle.numero}</strong><small>{detalle.cliente_nombre}</small></div>
                         <div><span>Subtotal</span><strong>{dinero(detalle.subtotal)}</strong></div>
                         <div><span>Descuentos</span><strong>{dinero(detalle.descuento_total)}</strong></div>
-                        <div><span>IVA</span><strong>{dinero(detalle.impuestos)}</strong></div>
+                        {Number(detalle.impuestos || 0) > 0 && <div><span>IVA</span><strong>{dinero(detalle.impuestos)}</strong></div>}
                         <div><span>Total</span><strong>{dinero(detalle.total)}</strong></div>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
@@ -469,7 +520,7 @@ export default function Presupuestos() {
                       </div>
                       {detalle.observaciones && <p><strong>Observaciones:</strong> {detalle.observaciones}</p>}
                       <table>
-                        <thead><tr><th>SKU</th><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Desc.</th><th>IVA</th><th>Total</th></tr></thead>
+                        <thead><tr><th>SKU</th><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Desc.</th>{Number(detalle.impuestos || 0) > 0 && <th>IVA</th>}<th>Total</th></tr></thead>
                         <tbody>
                           {detalle.detalle.map((item) => (
                             <tr key={item.id}>
@@ -478,7 +529,7 @@ export default function Presupuestos() {
                               <td>{Number(item.cantidad)}</td>
                               <td>{dinero(item.precio_unitario)}</td>
                               <td>{Number(item.descuento_porcentaje)}%</td>
-                              <td>{Number(item.iva_porcentaje)}%</td>
+                              {Number(detalle.impuestos || 0) > 0 && <td>{Number(item.iva_porcentaje)}%</td>}
                               <td>{dinero(item.total)}</td>
                             </tr>
                           ))}
