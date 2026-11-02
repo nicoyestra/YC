@@ -12,6 +12,26 @@ async function asegurarCostoHistorico(db, ejecutor = db) {
           "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario DECIMAL(14,2) NULL AFTER precio_unitario"
         );
       }
+      const [columnasCostoConIva] = await ejecutor.query(
+        "SHOW COLUMNS FROM detalle_ordenes_venta LIKE 'costo_unitario_con_iva'"
+      );
+      if (!columnasCostoConIva.length) {
+        await ejecutor.query(
+          "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario_con_iva DECIMAL(14,2) NULL AFTER costo_unitario"
+        );
+      }
+      // Convierte una sola vez los costos históricos guardados sin IVA.
+      // Para monotributo, el IVA de compra forma parte del costo real.
+      await ejecutor.query(`
+        UPDATE detalle_ordenes_venta d
+        JOIN ordenes_venta ov ON ov.id = d.orden_venta_id
+        JOIN productos p ON p.id = d.producto_id
+        SET d.costo_unitario_con_iva =
+          ROUND(d.costo_unitario * (1 + COALESCE(p.iva_porcentaje, 21) / 100), 2)
+        WHERE d.costo_unitario_con_iva IS NULL
+          AND d.costo_unitario IS NOT NULL
+          AND ov.estado IN ('confirmada','entregada')
+      `);
     })();
     esquemasCostoHistorico.set(db, promesa);
   }
@@ -275,7 +295,9 @@ async function resumen(req, res) {
       `),
 
       db.query(`
-        SELECT COALESCE(SUM(s.cantidad * p.precio_costo), 0) AS total
+        SELECT COALESCE(SUM(
+          s.cantidad * p.precio_costo * (1 + COALESCE(p.iva_porcentaje, 21) / 100)
+        ), 0) AS total
         FROM stock s
         JOIN productos p ON p.id = s.producto_id
         WHERE s.cantidad > 0
@@ -286,7 +308,11 @@ async function resumen(req, res) {
         SELECT
           COALESCE(SUM(
             d.subtotal -
-            (d.cantidad * COALESCE(d.costo_unitario, p.precio_costo, 0))
+            (d.cantidad * COALESCE(
+              d.costo_unitario_con_iva,
+              p.precio_costo * (1 + COALESCE(p.iva_porcentaje, 21) / 100),
+              0
+            ))
           ), 0) AS total
         FROM detalle_ordenes_venta d
         JOIN ordenes_venta ov ON ov.id = d.orden_venta_id

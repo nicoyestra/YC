@@ -19,6 +19,14 @@ async function asegurarCostoHistorico(db, ejecutor = db) {
           "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario DECIMAL(14,2) NULL AFTER precio_unitario"
         );
       }
+      const [columnasCostoConIva] = await ejecutor.query(
+        "SHOW COLUMNS FROM detalle_ordenes_venta LIKE 'costo_unitario_con_iva'"
+      );
+      if (!columnasCostoConIva.length) {
+        await ejecutor.query(
+          "ALTER TABLE detalle_ordenes_venta ADD COLUMN costo_unitario_con_iva DECIMAL(14,2) NULL AFTER costo_unitario"
+        );
+      }
     })();
     esquemasCostoHistorico.set(db, promesa);
   }
@@ -632,9 +640,13 @@ async function confirmar(req, res) {
     await conexion.query(
       `UPDATE detalle_ordenes_venta d
        JOIN productos p ON p.id = d.producto_id
-       SET d.costo_unitario = p.precio_costo
+       SET d.costo_unitario = COALESCE(d.costo_unitario, p.precio_costo),
+           d.costo_unitario_con_iva = COALESCE(
+             d.costo_unitario_con_iva,
+             ROUND(p.precio_costo * (1 + COALESCE(p.iva_porcentaje, 21) / 100), 2)
+           )
        WHERE d.orden_venta_id = ?
-         AND d.costo_unitario IS NULL`,
+         AND d.costo_unitario_con_iva IS NULL`,
       [ordenId]
     );
 
