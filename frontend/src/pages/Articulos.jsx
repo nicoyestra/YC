@@ -480,7 +480,8 @@ export default function Articulos() {
           ['codigo', 'codigooferta', 'codigonormalizado', 'sku', 'articulo'].includes(h)
         );
         const tienePrecio = encabezados.some((h) =>
-          ['precio', 'precioneto', 'preciooferta', 'costonetolista', 'costonetooferta', 'listasiva'].includes(h)
+          ['precio', 'precioneto', 'preciooferta', 'costonetolista', 'costonetooferta', 'listasiva',
+           'precioventasugerido', 'preciosugerido', 'preciofinal'].includes(h)
         );
         return tieneCodigo && tienePrecio;
       });
@@ -508,9 +509,11 @@ export default function Articulos() {
         };
 
         const codigo = get('Codigo', 'Codigo oferta', 'Codigo normalizado', 'SKU', 'Articulo');
-        const precioOriginal = tipo === 'oferta'
-          ? get('Costo neto oferta', 'Precio neto', 'Lista s/IVA', 'Precio', 'Precio*', 'Precio oferta')
-          : get('Costo neto lista', 'Lista s/IVA', 'Costo neto para compra', 'Precio neto', 'Precio', 'Precio*');
+        const precioOriginal = tipo === 'servicio'
+          ? get('Precio venta sugerido', 'Precio sugerido', 'Precio final', 'Precio')
+          : tipo === 'oferta'
+            ? get('Costo neto oferta', 'Precio neto', 'Lista s/IVA', 'Precio', 'Precio*', 'Precio oferta')
+            : get('Costo neto lista', 'Lista s/IVA', 'Costo neto para compra', 'Precio neto', 'Precio', 'Precio*');
         const tipoArticulo = get('Tipo');
         const carroceria = get('Carroceria', 'Carroc.');
         const observaciones = get('Observaciones', 'Caracteristicas', 'Compatibilidades');
@@ -529,14 +532,18 @@ export default function Articulos() {
           Marca: String(get('Marca') || '').trim(),
           Modelo: String(get('Modelo', 'Modelo descripcion') || '').trim(),
           Caracteristicas: detalles,
-          precio_neto: convertirPrecioExcel(precioOriginal),
-          precio_venta_sugerido: convertirPrecioExcel(get('Precio venta sugerido', 'Precio sugerido', 'Precio sugerido IVA inc', 'Precio sugerido IVA incluido')),
+          precio_neto: tipo === 'servicio' ? 0 : convertirPrecioExcel(precioOriginal),
+          precio_venta_sugerido: tipo === 'servicio'
+            ? convertirPrecioExcel(precioOriginal)
+            : convertirPrecioExcel(get('Precio venta sugerido', 'Precio sugerido', 'Precio sugerido IVA inc', 'Precio sugerido IVA incluido')),
           Proveedor: String(get('Proveedor', 'proveedor') || 'CHM').trim(),
           IVA_pct: Number(get('IVA pct', 'IVA') || 21),
           origen: String(get('Origen') || (tipo === 'oferta' ? `Lista de descuentos - ${archivo.name}` : 'Catálogo general')),
         };
       }).filter((x) =>
-        x.codigo && x.nombre && Number.isFinite(x.precio_neto) && x.precio_neto >= 0
+        x.codigo && x.nombre && (tipo === 'servicio'
+          ? Number.isFinite(x.precio_venta_sugerido) && x.precio_venta_sugerido >= 0
+          : Number.isFinite(x.precio_neto) && x.precio_neto >= 0)
       );
 
       if (!filas.length) {
@@ -666,7 +673,7 @@ export default function Articulos() {
       {mostrarImportacion && (
         <section className="tarjeta" style={{ marginBottom: 16 }}>
           <h2>Importar catálogo de proveedor</h2>
-          <p>Importá el Excel preparado para YC System. La importación no modifica existencias ni precios de venta.</p>
+          <p>Importá el Excel preparado para YC System. En modo Servicios se actualiza únicamente el precio de venta; no se modifican costos ni existencias.</p>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
             <div>
               <label>Tipo de lista</label>
@@ -677,6 +684,7 @@ export default function Articulos() {
               }}>
                 <option value="catalogo">Catálogo general</option>
                 <option value="oferta">Lista de descuentos (precio separado)</option>
+                <option value="servicio">Servicios (precio final de venta)</option>
               </select>
             </div>
             <div style={{ minWidth: 260, flex: 1 }}>
@@ -692,14 +700,17 @@ export default function Articulos() {
                   <thead><tr><th>Código</th><th>Artículo</th><th>Precio neto</th><th>IVA %</th><th>Precio con IVA</th></tr></thead>
                   <tbody>
                     {filasImportacion.slice(0, 8).map((fila, i) => {
+                      const esServicio = tipoImportacion === 'servicio';
                       const neto = Number(fila.precio_neto || 0);
-                      const iva = Number(fila.IVA_pct ?? 21);
-                      const totalConIva = neto * (1 + iva / 100);
+                      const iva = esServicio ? 0 : Number(fila.IVA_pct ?? 21);
+                      const totalConIva = esServicio
+                        ? Number(fila.precio_venta_sugerido || 0)
+                        : neto * (1 + iva / 100);
                       return (
                         <tr key={`${fila.codigo}-${i}`}>
                           <td>{fila.codigo}</td>
                           <td>{fila.nombre}</td>
-                          <td>${neto.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td>${(esServicio ? totalConIva : neto).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td>{iva}%</td>
                           <td><strong>${totalConIva.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
                         </tr>
@@ -708,7 +719,7 @@ export default function Articulos() {
                   </tbody>
                 </table>
               </div>
-              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. El sistema guarda el precio neto y el porcentaje de IVA; el precio final con IVA se calcula a partir de ambos. No se cargarán unidades en stock.</p>
+              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. {tipoImportacion === 'servicio' ? 'El importe se guarda directamente como precio de venta final, con IVA 0%; no se modifican costos ni existencias.' : 'El sistema guarda el precio neto y el porcentaje de IVA; no se cargarán unidades en stock.'}</p>
               <button type="button" className="boton" onClick={ejecutarImportacion} disabled={procesandoImportacion}>
                 {procesandoImportacion ? 'Importando...' : `Confirmar importación (${filasImportacion.length})`}
               </button>

@@ -414,7 +414,7 @@ async function productosBajoStock(req, res) {
 async function importarCatalogo(req, res) {
   const db = req.db;
   const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
-  const tipo = req.body?.tipo === 'oferta' ? 'oferta' : 'catalogo';
+  const tipo = ['oferta', 'servicio'].includes(req.body?.tipo) ? req.body.tipo : 'catalogo';
   if (!filas.length) return res.status(400).json({ error: 'No hay filas para importar.' });
   if (filas.length > 5000) return res.status(400).json({ error: 'El archivo supera el máximo de 5.000 filas por importación.' });
 
@@ -465,8 +465,10 @@ async function importarCatalogo(req, res) {
       const codigo = txt(f.codigo ?? f.Codigo ?? f.Codigo_oferta ?? f.SKU ?? f.sku);
       const clave = normalize(f.codigo_normalizado || codigo);
       const descripcion = txt(f.nombre ?? f.Descripcion ?? f.Modelo_Descripcion ?? f.descripcion);
-      const precio = num(f.precio_neto ?? f.Costo_neto_lista ?? f.Costo_neto_oferta ?? f.precio ?? f.precio_costo);
-      if (!codigo || !clave || !descripcion || precio === null || precio < 0) { omitidas++; continue; }
+      const precioVenta = num(f.precio_venta_sugerido ?? f.Precio_venta_sugerido ?? f.precio_venta);
+      const precio = tipo === 'servicio' ? 0 : num(f.precio_neto ?? f.Costo_neto_lista ?? f.Costo_neto_oferta ?? f.precio ?? f.precio_costo);
+      if (!codigo || !clave || !descripcion ||
+          (tipo === 'servicio' ? precioVenta === null || precioVenta < 0 : precio === null || precio < 0)) { omitidas++; continue; }
       if (vistos.has(clave)) { omitidas++; continue; }
       vistos.add(clave);
       normalizadas.push({
@@ -475,8 +477,8 @@ async function importarCatalogo(req, res) {
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
         precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual')),
         proveedorNombre: txt(f.Proveedor ?? f.proveedor ?? 'CHM') || 'CHM',
-        precioVentaSugerido: num(f.precio_venta_sugerido ?? f.Precio_venta_sugerido ?? f.precio_venta),
-        iva: num(f.IVA_pct ?? f.iva_porcentaje) ?? 21
+        precioVentaSugerido: precioVenta,
+        iva: tipo === 'servicio' ? 0 : (num(f.IVA_pct ?? f.iva_porcentaje) ?? 21)
       });
     }
     if (!normalizadas.length) return res.status(400).json({ error: 'No se encontraron filas válidas. Revisá los encabezados y la columna de precio.' });
@@ -487,16 +489,17 @@ async function importarCatalogo(req, res) {
     let creados = 0, actualizados = 0, ofertas = 0;
     try {
       for (const f of normalizadas) {
+        const nombreProveedor = tipo === 'servicio' ? 'SERVICIO PROPIO' : f.proveedorNombre;
         const [provRows] = await cx.query(
           'SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER(?) LIMIT 1',
-          [f.proveedorNombre]
+          [nombreProveedor]
         );
         let proveedorId;
         if (provRows.length) proveedorId = provRows[0].id;
         else {
           const [pr] = await cx.query(
             'INSERT INTO proveedores (nombre, activo) VALUES (?, TRUE)',
-            [f.proveedorNombre]
+            [nombreProveedor]
           );
           proveedorId = pr.insertId;
         }
@@ -517,7 +520,12 @@ async function importarCatalogo(req, res) {
         let productoId;
         if (ex.length) {
           productoId = ex[0].id;
-          if (tipo === 'catalogo') {
+          if (tipo === 'servicio') {
+            await cx.query(
+              'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_venta = ?, iva_porcentaje = 0, activo = TRUE WHERE id = ?',
+              [nombre, descripcionCompleta, proveedorId, f.precioVentaSugerido, productoId]
+            );
+          } else if (tipo === 'catalogo') {
             await cx.query(
               'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_costo = ?, precio_venta = COALESCE(?, precio_venta), iva_porcentaje = ?, activo = TRUE WHERE id = ?',
               [nombre, descripcionCompleta, proveedorId, f.precio, f.precioVentaSugerido, f.iva, productoId]
@@ -525,11 +533,11 @@ async function importarCatalogo(req, res) {
           }
           actualizados++;
         } else {
-          const costoInicial = tipo === 'oferta' ? 0 : f.precio;
+          const costoInicial = ['oferta', 'servicio'].includes(tipo) ? 0 : f.precio;
           const [p] = await cx.query(
             `INSERT INTO productos (sku, nombre, descripcion, proveedor_id, precio_costo, precio_venta, iva_porcentaje, stock_minimo, unidad_medida, activo)
              VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'unidad', TRUE)`,
-            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, tipo === 'catalogo' ? (f.precioVentaSugerido ?? 0) : 0, f.iva]
+            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, ['catalogo', 'servicio'].includes(tipo) ? (f.precioVentaSugerido ?? 0) : 0, f.iva]
           );
           productoId = p.insertId;
           creados++;

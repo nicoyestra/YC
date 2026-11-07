@@ -132,6 +132,10 @@ export default function Presupuestos() {
   const [filtroEstado, setFiltroEstado] = useState('');
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [altaClienteManual, setAltaClienteManual] = useState(false);
+  const [clienteManual, setClienteManual] = useState({
+    nombre: '', cuit_dni: '', telefono: '', email: ''
+  });
 
   const [nuevo, setNuevo] = useState({
     cliente_id: '',
@@ -225,6 +229,11 @@ export default function Presupuestos() {
     e.preventDefault();
     setError('');
 
+    if (!nuevo.cliente_id && (!altaClienteManual || !clienteManual.nombre.trim())) {
+      setError('Seleccioná un cliente o completá el nombre del cliente nuevo.');
+      return;
+    }
+
     const invalido = nuevo.items.some(
       (item) => !item.producto_id || Number(item.cantidad) <= 0 || Number(item.precio_unitario) < 0
     );
@@ -235,7 +244,18 @@ export default function Presupuestos() {
 
     try {
       setGuardando(true);
-      const { data } = await api.post('/presupuestos', nuevo);
+      let clienteId = nuevo.cliente_id;
+      if (!clienteId && altaClienteManual) {
+        const alta = await api.post('/ventas/clientes', {
+          nombre: clienteManual.nombre.trim(),
+          cuit_dni: clienteManual.cuit_dni.trim() || null,
+          telefono: clienteManual.telefono.trim() || null,
+          email: clienteManual.email.trim() || null,
+          es_externo: false,
+        });
+        clienteId = alta.data.id;
+      }
+      const { data } = await api.post('/presupuestos', { ...nuevo, cliente_id: clienteId });
       alert(`Presupuesto ${data.numero} creado correctamente`);
       setNuevo({
         cliente_id: '',
@@ -244,6 +264,8 @@ export default function Presupuestos() {
         observaciones: '',
         items: [{ ...ITEM_VACIO }],
       });
+      setAltaClienteManual(false);
+      setClienteManual({ nombre: '', cuit_dni: '', telefono: '', email: '' });
       cerrarFormulario();
       await cargar();
     } catch (err) {
@@ -327,18 +349,49 @@ export default function Presupuestos() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <div style={{ flex: '2 1 280px' }}>
               <label>Cliente</label>
-              <select
-                value={nuevo.cliente_id}
-                onChange={(e) => setNuevo({ ...nuevo, cliente_id: e.target.value })}
-                required
-              >
-                <option value="">Seleccionar</option>
-                {clientes.map((cliente) => (
-                  <option key={cliente.id} value={cliente.id}>
-                    {cliente.nombre}{cliente.cuit_dni ? ` — ${cliente.cuit_dni}` : ''}
-                  </option>
-                ))}
-              </select>
+              {!altaClienteManual ? (
+                <>
+                  <select
+                    value={nuevo.cliente_id}
+                    onChange={(e) => setNuevo({ ...nuevo, cliente_id: e.target.value })}
+                  >
+                    <option value="">Seleccionar cliente cargado</option>
+                    {clientes.map((cliente) => (
+                      <option key={cliente.id} value={cliente.id}>
+                        {cliente.nombre}{cliente.cuit_dni ? ` — ${cliente.cuit_dni}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="boton boton-secundario" style={{ marginTop: 8 }}
+                    onClick={() => { setAltaClienteManual(true); setNuevo({ ...nuevo, cliente_id: '' }); }}>
+                    + Cargar cliente manualmente
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    value={clienteManual.nombre}
+                    onChange={(e) => setClienteManual({ ...clienteManual, nombre: e.target.value })}
+                    placeholder="Nombre / razón social"
+                    required
+                  />
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    <input value={clienteManual.cuit_dni}
+                      onChange={(e) => setClienteManual({ ...clienteManual, cuit_dni: e.target.value })}
+                      placeholder="CUIT / DNI" />
+                    <input value={clienteManual.telefono}
+                      onChange={(e) => setClienteManual({ ...clienteManual, telefono: e.target.value })}
+                      placeholder="Teléfono" />
+                    <input type="email" value={clienteManual.email}
+                      onChange={(e) => setClienteManual({ ...clienteManual, email: e.target.value })}
+                      placeholder="Correo electrónico" />
+                  </div>
+                  <button type="button" className="boton boton-secundario" style={{ marginTop: 8 }}
+                    onClick={() => { setAltaClienteManual(false); setClienteManual({ nombre: '', cuit_dni: '', telefono: '', email: '' }); }}>
+                    Elegir cliente existente
+                  </button>
+                </>
+              )}
             </div>
             <div style={{ flex: '1 1 170px' }}>
               <label>Fecha</label>
