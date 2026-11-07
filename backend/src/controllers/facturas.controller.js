@@ -1,4 +1,4 @@
-const IVA = 0.21; // ajustable según necesidad fiscal
+// Los comprobantes C internos guardan el precio final de la orden sin agregar IVA nuevamente.
 const DIAS_VENCIMIENTO_CHEQUE = 60;
 const { masterPool } = require('../config/db');
 
@@ -170,13 +170,10 @@ async function generarDesdeOrdenVenta(req, res) {
       0
     );
 
-    const impuestos = Number(
-      (subtotal * IVA).toFixed(2)
-    );
-
-    const total = Number(
-      (subtotal + impuestos).toFixed(2)
-    );
+    // La orden ya contiene el precio final acordado con el cliente.
+    // En el comprobante C interno no se vuelve a adicionar el 21%.
+    const impuestos = 0;
+    const total = Number(subtotal.toFixed(2));
 
     const condicion =
       condicion_pago || 'contado';

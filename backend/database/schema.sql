@@ -215,7 +215,7 @@ CREATE TABLE facturas (
     id INT AUTO_INCREMENT PRIMARY KEY,
     numero VARCHAR(30) UNIQUE NOT NULL,
     tipo ENUM('A','B','C') DEFAULT 'B',
-    condicion_pago ENUM('contado','cuenta_corriente','cheque') NOT NULL DEFAULT 'contado',
+    condicion_pago VARCHAR(100) NOT NULL DEFAULT 'contado',
     orden_venta_id INT NULL,
     cliente_id INT NOT NULL,
     fecha_emision DATE NOT NULL,
