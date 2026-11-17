@@ -7,6 +7,8 @@ const VACIO = {
   sku: '',
   codigo_barras: '',
   nombre: '',
+  marca: '',
+  codigo_equivalencia: '',
   descripcion: '',
   categoria_id: '',
   proveedor_id: '',
@@ -24,6 +26,7 @@ export default function Articulos() {
   const [preciosOferta, setPreciosOferta] = useState([]);
   const [filtroOfertas, setFiltroOfertas] = useState('todos');
   const [filtroProveedor, setFiltroProveedor] = useState('todos');
+  const [filtroMarca, setFiltroMarca] = useState('todos');
   const [productoComparar, setProductoComparar] = useState(null);
 
   const [busqueda, setBusqueda] = useState('');
@@ -43,6 +46,8 @@ export default function Articulos() {
   const [expandido, setExpandido] = useState(null);
   const [mostrarImportacion, setMostrarImportacion] = useState(false);
   const [tipoImportacion, setTipoImportacion] = useState('catalogo');
+  const [proveedorImportacion, setProveedorImportacion] = useState('');
+  const [marcaImportacion, setMarcaImportacion] = useState('');
   const [archivoImportacion, setArchivoImportacion] = useState(null);
   const [filasImportacion, setFilasImportacion] = useState([]);
   const [resumenImportacion, setResumenImportacion] = useState('');
@@ -304,6 +309,8 @@ export default function Articulos() {
         sku: data.sku || '',
         codigo_barras: data.codigo_barras || '',
         nombre: data.nombre || '',
+        marca: data.marca || '',
+        codigo_equivalencia: data.codigo_equivalencia || '',
         descripcion: data.descripcion || '',
         categoria_id: data.categoria_id || '',
         proveedor_id: data.proveedor_id || '',
@@ -529,14 +536,15 @@ export default function Articulos() {
           codigo: String(codigo ?? '').trim(),
           codigo_normalizado: String(get('Codigo normalizado') || codigo || '').trim(),
           nombre: String(get('Descripcion', 'Modelo descripcion', 'Nombre', 'Modelo') || '').trim(),
-          Marca: String(get('Marca') || '').trim(),
+          Marca: String(get('Marca del vidrio', 'Fabricante del vidrio', 'Marca cristal', 'Fabricante vidrio', 'Glass brand') || marcaImportacion || '').trim(),
+          codigo_equivalencia: String(get('Codigo equivalencia', 'Codigo comun', 'Equivalencia', 'Codigo grupo') || '').trim(),
           Modelo: String(get('Modelo', 'Modelo descripcion') || '').trim(),
           Caracteristicas: detalles,
           precio_neto: tipo === 'servicio' ? 0 : convertirPrecioExcel(precioOriginal),
           precio_venta_sugerido: tipo === 'servicio'
             ? convertirPrecioExcel(precioOriginal)
             : convertirPrecioExcel(get('Precio venta sugerido', 'Precio sugerido', 'Precio sugerido IVA inc', 'Precio sugerido IVA incluido')),
-          Proveedor: String(get('Proveedor', 'proveedor') || 'CHM').trim(),
+          Proveedor: String(get('Proveedor', 'proveedor') || proveedorImportacion).trim(),
           IVA_pct: Number(get('IVA pct', 'IVA') || 21),
           origen: String(get('Origen') || (tipo === 'oferta' ? `Lista de descuentos - ${archivo.name}` : 'Catálogo general')),
         };
@@ -576,7 +584,8 @@ export default function Articulos() {
     setProcesandoImportacion(true);
     setError('');
     try {
-      const { data } = await api.post('/productos/importar', { tipo: tipoImportacion, filas: filasImportacion });
+      const filasConDatosGenerales = filasImportacion.map((f) => ({ ...f, Proveedor: f.Proveedor || proveedorImportacion, Marca: f.Marca || marcaImportacion }));
+      const { data } = await api.post('/productos/importar', { tipo: tipoImportacion, proveedor: proveedorImportacion, marca: marcaImportacion, filas: filasConDatosGenerales });
       setResumenImportacion(`${data.mensaje}: ${data.creados} nuevos, ${data.actualizados} existentes, ${data.ofertas_guardadas} precios de oferta guardados y ${data.omitidas} filas omitidas. El stock no se modificó.`);
       setFilasImportacion([]);
       setArchivoImportacion(null);
@@ -622,6 +631,7 @@ export default function Articulos() {
     const tieneOferta = ofertasProducto.length > 0;
     if (filtroOfertas === 'con_oferta' && !tieneOferta) return false;
     if (filtroOfertas === 'sin_oferta' && tieneOferta) return false;
+    if (filtroMarca !== 'todos' && String(producto.marca || '').toUpperCase() !== filtroMarca) return false;
     if (filtroProveedor !== 'todos') {
       const coincideHabitual = String(producto.proveedor_id || '') === filtroProveedor;
       const coincideOferta = ofertasProducto.some((o) => String(o.proveedor_id || '') === filtroProveedor);
@@ -675,6 +685,22 @@ export default function Articulos() {
           <h2>Importar catálogo de proveedor</h2>
           <p>Importá el Excel preparado para YC System. En modo Servicios se actualiza únicamente el precio de venta; no se modifican costos ni existencias.</p>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+            <div style={{ minWidth: 220 }}>
+              <label>Proveedor de esta lista (si el Excel no lo indica)</label>
+              <select value={proveedorImportacion} onChange={(e) => setProveedorImportacion(e.target.value)}>
+                <option value="">Seleccionar proveedor</option>
+                {proveedores.map((p) => <option key={p.id} value={p.nombre}>{p.nombre}</option>)}
+              </select>
+            </div>
+            <div style={{ minWidth: 190 }}>
+              <label>Marca del vidrio (si el Excel no la indica)</label>
+              <select value={marcaImportacion} onChange={(e) => setMarcaImportacion(e.target.value)}>
+                <option value="">Detectar / Sin especificar</option>
+                <option value="FUYAO">Fuyao</option>
+                <option value="PILKINGTON">Pilkington</option>
+                <option value="EUROGLASS">Euroglass</option>
+              </select>
+            </div>
             <div>
               <label>Tipo de lista</label>
               <select value={tipoImportacion} onChange={(e) => {
@@ -697,7 +723,7 @@ export default function Articulos() {
             <>
               <div style={{ overflowX: 'auto', marginTop: 12 }}>
                 <table>
-                  <thead><tr><th>Código</th><th>Artículo</th><th>Precio neto</th><th>IVA %</th><th>Precio con IVA</th></tr></thead>
+                  <thead><tr><th>Código</th><th>Artículo</th><th>Marca</th><th>Precio neto</th><th>IVA %</th><th>Precio con IVA</th></tr></thead>
                   <tbody>
                     {filasImportacion.slice(0, 8).map((fila, i) => {
                       const esServicio = tipoImportacion === 'servicio';
@@ -710,6 +736,7 @@ export default function Articulos() {
                         <tr key={`${fila.codigo}-${i}`}>
                           <td>{fila.codigo}</td>
                           <td>{fila.nombre}</td>
+                          <td>{fila.Marca || (/PILKINGTON/i.test(fila.nombre) ? 'PILKINGTON' : /EUROGLASS/i.test(fila.nombre) ? 'EUROGLASS' : /FUYAO/i.test(fila.nombre) ? 'FUYAO' : '—')}</td>
                           <td>${(esServicio ? totalConIva : neto).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td>{iva}%</td>
                           <td><strong>${totalConIva.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
@@ -719,8 +746,8 @@ export default function Articulos() {
                   </tbody>
                 </table>
               </div>
-              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. {tipoImportacion === 'servicio' ? 'El importe se guarda directamente como precio de venta final, con IVA 0%; no se modifican costos ni existencias.' : 'El sistema guarda el precio neto y el porcentaje de IVA; no se cargarán unidades en stock.'}</p>
-              <button type="button" className="boton" onClick={ejecutarImportacion} disabled={procesandoImportacion}>
+              <p>Vista previa de hasta 8 filas. Se importarán los {filasImportacion.length} códigos únicos válidos. La marca se toma de la columna Marca o se detecta si figura en la descripción. {tipoImportacion === 'servicio' ? 'El importe se guarda directamente como precio de venta final, con IVA 0%; no se modifican costos ni existencias.' : 'El sistema guarda el precio neto y el porcentaje de IVA; no se cargarán unidades en stock.'}</p>
+              <button type="button" className="boton" onClick={ejecutarImportacion} disabled={procesandoImportacion || filasImportacion.some((f) => !(f.Proveedor || proveedorImportacion) && tipoImportacion !== 'servicio')} >
                 {procesandoImportacion ? 'Importando...' : `Confirmar importación (${filasImportacion.length})`}
               </button>
             </>
@@ -986,6 +1013,23 @@ export default function Articulos() {
             required
           />
 
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label>Marca / fabricante</label>
+              <select value={nuevo.marca} onChange={(e) => setNuevo({ ...nuevo, marca: e.target.value })}>
+                <option value="">Sin especificar</option>
+                <option value="FUYAO">FUYAO</option>
+                <option value="PILKINGTON">PILKINGTON</option>
+                <option value="EUROGLASS">EUROGLASS</option>
+                {!['FUYAO', 'PILKINGTON', 'EUROGLASS', ''].includes(String(nuevo.marca || '').toUpperCase()) && <option value={nuevo.marca}>{nuevo.marca}</option>}
+              </select>
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label>Código de equivalencia (mismo vidrio)</label>
+              <input value={nuevo.codigo_equivalencia} onChange={(e) => setNuevo({ ...nuevo, codigo_equivalencia: e.target.value.toUpperCase() })} placeholder="Ej.: VW-AMAROK-2009-2015" />
+            </div>
+          </div>
+
           <label>Descripción detallada</label>
 
           <textarea
@@ -1152,6 +1196,13 @@ export default function Articulos() {
             {proveedores.map((proveedor) => <option key={proveedor.id} value={String(proveedor.id)}>{proveedor.nombre}</option>)}
           </select>
         </div>
+        <div style={{ minWidth: 200, flex: 1 }}>
+          <label htmlFor="filtro-marca">Filtrar por marca</label>
+          <select id="filtro-marca" value={filtroMarca} onChange={(e) => setFiltroMarca(e.target.value)} style={{ width: '100%', minHeight: 42 }}>
+            <option value="todos">Todas las marcas</option>
+            {[...new Set(productos.map((p) => String(p.marca || '').trim().toUpperCase()).filter(Boolean))].sort().map((marca) => <option key={marca} value={marca}>{marca}</option>)}
+          </select>
+        </div>
         <div style={{ color: '#475569', paddingBottom: 8 }}>
           Mostrando <strong>{productosVisibles.length}</strong> de {productos.length} artículos · <strong>{productos.filter((p) => preciosOferta.some((o) => Number(o.producto_id) === Number(p.id))).length}</strong> con oferta
         </div>
@@ -1164,6 +1215,7 @@ export default function Articulos() {
               <th>SKU</th>
               <th>Cód. barras</th>
               <th>Nombre</th>
+              <th>Marca</th>
               <th>Proveedor</th>
               <th>Costo habitual (con IVA)</th>
               <th>Oferta proveedor (con IVA)</th>
@@ -1178,7 +1230,7 @@ export default function Articulos() {
             {productosVisibles.length === 0 && !buscando && (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={11}
                   style={{
                     textAlign: 'center',
                     padding: 30,
@@ -1195,6 +1247,7 @@ export default function Articulos() {
                   <td>{producto.sku}</td>
                   <td>{producto.codigo_barras || '—'}</td>
                   <td>{producto.nombre}</td>
+                  <td><strong>{producto.marca || '—'}</strong>{producto.codigo_equivalencia && <div><small>Eq.: {producto.codigo_equivalencia}</small></div>}</td>
                   <td>{producto.proveedor_nombre || '—'}</td>
                   <td>
                     <div>${Number(producto.precio_costo || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>(neto)</small></div>
@@ -1259,7 +1312,7 @@ export default function Articulos() {
                 {expandido === producto.id && (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={11}
                       style={{ background: '#f9fafb' }}
                     >
                       <strong>Descripción:</strong>{' '}
@@ -1278,6 +1331,9 @@ export default function Articulos() {
         const producto = productoComparar;
         const ivaHabitual = Number(producto.iva_porcentaje ?? 21);
         const ofertas = preciosOferta.filter((o) => Number(o.producto_id) === Number(producto.id));
+        const equivalentes = producto.codigo_equivalencia
+          ? productos.filter((p) => String(p.codigo_equivalencia || '').trim().toUpperCase() === String(producto.codigo_equivalencia).trim().toUpperCase())
+          : [];
         const fmt = (n) => `$${Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         const costoHabitual = Number(producto.precio_costo || 0);
         const opciones = [
@@ -1300,7 +1356,13 @@ export default function Articulos() {
               <div style={{ overflowX: 'auto' }}><table style={{ width: '100%' }}><thead><tr><th>Proveedor</th><th>Tipo de precio</th><th>Neto</th><th>IVA</th><th>Total con IVA</th><th>Comparación</th></tr></thead><tbody>
                 {opciones.map((o, i) => <tr key={`${o.proveedor}-${o.tipo}-${i}`}><td><strong>{o.proveedor}</strong></td><td>{o.tipo}</td><td>{fmt(o.neto)}</td><td>{o.iva}%</td><td><strong>{fmt(o.total)}</strong></td><td>{minimo !== null && o.total === minimo ? <strong style={{ color: '#15803d' }}>Menor precio</strong> : minimo !== null ? fmt(o.total - minimo) + ' más caro' : 'Sin otro precio para comparar'}</td></tr>)}
               </tbody></table></div>
-              {ofertas.length === 0 && <p style={{ marginTop: 16, color: '#b45309' }}>Este artículo no tiene una oferta vinculada. Probá buscar el código en la lista de ofertas o verificá que coincida con el código del proveedor.</p>}
+              <h3 style={{ marginTop: 24 }}>Otros proveedores del mismo vidrio</h3>
+              {equivalentes.length > 1 ? (
+                <div style={{ overflowX: 'auto' }}><table style={{ width: '100%' }}><thead><tr><th>Marca</th><th>Proveedor</th><th>Código original</th><th>Costo neto</th><th>IVA</th><th>Costo con IVA</th></tr></thead><tbody>
+                  {equivalentes.map((p) => { const neto = Number(p.precio_costo || 0); const iva = Number(p.iva_porcentaje ?? 21); return <tr key={p.id}><td><strong>{p.marca || 'Sin marca'}</strong></td><td>{p.proveedor_nombre || '—'}</td><td>{p.sku}</td><td>{fmt(neto)}</td><td>{iva}%</td><td><strong>{fmt(neto * (1 + iva / 100))}</strong></td></tr>; })}
+                </tbody></table></div>
+              ) : <p style={{ color: '#b45309' }}>Todavía no hay otros artículos vinculados. Para comparar, asigná el mismo código de equivalencia a las versiones Fuyao, Pilkington y Euroglass del mismo parabrisas. No se agrupan automáticamente para evitar comparar vidrios distintos.</p>}
+              {ofertas.length === 0 && <p style={{ marginTop: 16, color: '#64748b' }}>Este artículo no tiene una oferta adicional vinculada a su registro.</p>}
             </section>
           </div>
         );

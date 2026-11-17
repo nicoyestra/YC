@@ -1,6 +1,22 @@
+
+// Agrega los campos de marca y equivalencia de forma segura en cada base tenant.
+// Se ejecuta sobre req.db: nunca toca yc_master ni otras empresas.
+const columnasMarcaPorDb = new WeakSet();
+async function asegurarColumnasMarca(db) {
+  if (db && (typeof db === 'object' || typeof db === 'function') && columnasMarcaPorDb.has(db)) return;
+  const [marca] = await db.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'productos' AND COLUMN_NAME = 'marca'`);
+  const marcaNueva = !marca.length;
+  if (marcaNueva) await db.query("ALTER TABLE productos ADD COLUMN marca VARCHAR(60) NULL AFTER nombre");
+  const [equiv] = await db.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'productos' AND COLUMN_NAME = 'codigo_equivalencia'`);
+  if (!equiv.length) await db.query("ALTER TABLE productos ADD COLUMN codigo_equivalencia VARCHAR(100) NULL AFTER marca");
+  // No se infieren marcas ni proveedores durante la migración: cada empresa conserva sus datos.
+  if (db && (typeof db === 'object' || typeof db === 'function')) columnasMarcaPorDb.add(db);
+}
+
 async function listar(req, res) {
   try {
     const db = req.db;
+    await asegurarColumnasMarca(db);
 
     const { buscar } = req.query;
 
@@ -70,6 +86,7 @@ async function listar(req, res) {
 async function obtener(req, res) {
   try {
     const db = req.db;
+    await asegurarColumnasMarca(db);
 
     const [rows] = await db.query(
       `SELECT
@@ -125,6 +142,7 @@ async function obtener(req, res) {
 async function buscarPorCodigoBarras(req, res) {
   try {
     const db = req.db;
+    await asegurarColumnasMarca(db);
 
     const [rows] = await db.query(
       `SELECT
@@ -163,11 +181,14 @@ async function buscarPorCodigoBarras(req, res) {
 async function crear(req, res) {
   try {
     const db = req.db;
+    await asegurarColumnasMarca(db);
 
     const {
       sku,
       codigo_barras,
       nombre,
+      marca,
+      codigo_equivalencia,
       descripcion,
       categoria_id,
       proveedor_id,
@@ -190,6 +211,8 @@ async function crear(req, res) {
          sku,
          codigo_barras,
          nombre,
+         marca,
+         codigo_equivalencia,
          descripcion,
          categoria_id,
          proveedor_id,
@@ -199,11 +222,13 @@ async function crear(req, res) {
          stock_minimo,
          unidad_medida
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         sku,
         codigo_barras || null,
         nombre,
+        marca || null,
+        codigo_equivalencia || null,
         descripcion || null,
         categoria_id || null,
         proveedor_id || null,
@@ -244,10 +269,13 @@ async function crear(req, res) {
 async function actualizar(req, res) {
   try {
     const db = req.db;
+    await asegurarColumnasMarca(db);
 
     const {
       codigo_barras,
       nombre,
+      marca,
+      codigo_equivalencia,
       descripcion,
       categoria_id,
       proveedor_id,
@@ -264,6 +292,8 @@ async function actualizar(req, res) {
        SET
          codigo_barras = ?,
          nombre = ?,
+         marca = ?,
+         codigo_equivalencia = ?,
          descripcion = ?,
          categoria_id = ?,
          proveedor_id = ?,
@@ -277,6 +307,8 @@ async function actualizar(req, res) {
       [
         codigo_barras || null,
         nombre,
+        marca || null,
+        codigo_equivalencia || null,
         descripcion,
         categoria_id || null,
         proveedor_id || null,
@@ -411,10 +443,13 @@ async function productosBajoStock(req, res) {
 
 
 // Importación masiva de catálogos de proveedor. No crea ni modifica existencias.
+const txtSeguro = (v) => String(v ?? '').trim();
 async function importarCatalogo(req, res) {
   const db = req.db;
   const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
-  const tipo = ['oferta', 'servicio'].includes(req.body?.tipo) ? req.body.tipo : 'catalogo';
+  const tipo = ['oferta', 'servicio', 'actualizar_marca'].includes(req.body?.tipo) ? req.body.tipo : 'catalogo';
+  const proveedorPorDefecto = txtSeguro(req.body?.proveedor);
+  const marcaPorDefecto = txtSeguro(req.body?.marca);
   if (!filas.length) return res.status(400).json({ error: 'No hay filas para importar.' });
   if (filas.length > 5000) return res.status(400).json({ error: 'El archivo supera el máximo de 5.000 filas por importación.' });
 
@@ -429,6 +464,7 @@ async function importarCatalogo(req, res) {
   const normalize = (v) => txt(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
   let conn;
   try {
+    await asegurarColumnasMarca(db);
     // Oferta se guarda separada de precio_costo. Esta tabla se crea de forma idempotente.
     await db.query(`
       CREATE TABLE IF NOT EXISTS precios_oferta_proveedor (
@@ -471,17 +507,90 @@ async function importarCatalogo(req, res) {
           (tipo === 'servicio' ? precioVenta === null || precioVenta < 0 : precio === null || precio < 0)) { omitidas++; continue; }
       if (vistos.has(clave)) { omitidas++; continue; }
       vistos.add(clave);
+      const marcaInformada = txt(f.Marca_vidrio ?? f['Marca del vidrio'] ?? f.Fabricante_vidrio ?? f.marca_vidrio ?? f.Marca ?? f.marca);
+      const proveedorNombre = txt(f.Proveedor ?? f.proveedor ?? proveedorPorDefecto);
+      if (tipo !== 'servicio' && !proveedorNombre) { omitidas++; continue; }
+      const marcaDetectada = marcaInformada || marcaPorDefecto || (/\bPILKINGTON\b/i.test(descripcion) ? 'PILKINGTON' : /\bEUROGLASS\b/i.test(descripcion) ? 'EUROGLASS' : /\bFUYAO\b/i.test(descripcion) ? 'FUYAO' : '');
+      const equivalencia = txt(f.codigo_equivalencia ?? f.Codigo_equivalencia ?? f['Código equivalencia'] ?? f.Equivalencia ?? f.Codigo_comun);
       normalizadas.push({
         codigo, clave, descripcion,
-        marca: txt(f.Marca), modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
+        marca: marcaDetectada, codigoEquivalencia: equivalencia,
+        modelo: txt(f.Modelo ?? f.Modelo_Descripcion),
         detalle: txt(f.Caracteristicas ?? f.Compatibilidades ?? f.Observaciones),
         precio, origen: txt(f.origen ?? f.Origen ?? (tipo === 'oferta' ? 'OFERTA FUYAO' : 'Catálogo habitual')),
-        proveedorNombre: txt(f.Proveedor ?? f.proveedor ?? 'CHM') || 'CHM',
+        proveedorNombre,
         precioVentaSugerido: precioVenta,
         iva: tipo === 'servicio' ? 0 : (num(f.IVA_pct ?? f.iva_porcentaje) ?? 21)
       });
     }
     if (!normalizadas.length) return res.status(400).json({ error: 'No se encontraron filas válidas. Revisá los encabezados y la columna de precio.' });
+
+    // Modo seguro: actualiza solo marca y nombre de artículos existentes del proveedor elegido.
+    // Nunca crea productos/proveedores ni toca precios, IVA, stock, movimientos u ofertas.
+    if (tipo === 'actualizar_marca') {
+      if (!proveedorPorDefecto) {
+        return res.status(400).json({ error: 'Seleccioná el proveedor para limitar la actualización.' });
+      }
+      conn = typeof db.getConnection === 'function' ? await db.getConnection() : null;
+      const cxSeguro = conn || db;
+      if (conn) await conn.beginTransaction();
+      let actualizadosMarca = 0;
+      let noEncontrados = 0;
+      let ambiguos = 0;
+      try {
+        const [existentes] = await cxSeguro.query(
+          `SELECT p.id, p.sku, pr.nombre AS proveedor_nombre
+           FROM productos p
+           INNER JOIN proveedores pr ON pr.id = p.proveedor_id`
+        );
+        for (const f of normalizadas) {
+          const marca = txt(f.marca).toUpperCase();
+          if (!marca) { noEncontrados++; continue; }
+          const candidatos = existentes.filter(p =>
+            normalize(p.sku) === f.clave &&
+            txt(p.proveedor_nombre).toLowerCase() === proveedorPorDefecto.toLowerCase()
+          );
+          if (!candidatos.length) { noEncontrados++; continue; }
+          if (candidatos.length > 1) { ambiguos++; continue; }
+
+          const abreviatura = marca === 'PILKINGTON' ? 'PLK'
+            : marca === 'EUROGLASS' ? 'EUR'
+            : marca === 'FUYAO' ? 'FUYAO' : marca;
+          const descripcionLimpia = f.descripcion
+            .replace(/\\bPILKINGTON\\b/gi, '')
+            .replace(/\\bEUROGLASS\\b/gi, '')
+            .replace(/\\bFUYAO\\b/gi, '')
+            .replace(/\\s{2,}/g, ' ').trim();
+          const nombre = `${abreviatura} ${descripcionLimpia}`.trim().slice(0, 200);
+          await cxSeguro.query(
+            'UPDATE productos SET marca = ?, nombre = ? WHERE id = ?',
+            [marca, nombre, candidatos[0].id]
+          );
+          actualizadosMarca++;
+        }
+        if (conn) await conn.commit();
+      } catch (e) {
+        if (conn) await conn.rollback();
+        throw e;
+      } finally {
+        if (conn) conn.release();
+        conn = null;
+      }
+      return res.json({
+        mensaje: 'Actualización de marcas completada',
+        tipo,
+        leidas: filas.length,
+        validas: normalizadas.length,
+        creados: 0,
+        actualizados: actualizadosMarca,
+        ofertas_guardadas: 0,
+        omitidas: omitidas + noEncontrados + ambiguos,
+        no_encontrados: noEncontrados,
+        ambiguos,
+        stock_modificado: false,
+        precios_modificados: false
+      });
+    }
 
     conn = typeof db.getConnection === 'function' ? await db.getConnection() : null;
     const cx = conn || db;
@@ -504,7 +613,7 @@ async function importarCatalogo(req, res) {
           proveedorId = pr.insertId;
         }
         const sku = f.codigo.slice(0, 50);
-        const nombre = `${f.marca ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
+        const nombre = `${f.marca && !new RegExp(f.marca, 'i').test(f.descripcion) ? f.marca + ' ' : ''}${f.descripcion}`.slice(0, 200);
         const descripcionCompleta = [f.modelo && f.modelo !== f.descripcion ? `Modelo: ${f.modelo}` : '', f.detalle].filter(Boolean).join(' | ').slice(0, 60000) || null;
         // Buscar por SKU exacto y también por código normalizado: CHM usa
         // indistintamente 52-0403 y 52 0403. Sin esto se crean duplicados y
@@ -522,22 +631,22 @@ async function importarCatalogo(req, res) {
           productoId = ex[0].id;
           if (tipo === 'servicio') {
             await cx.query(
-              'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_venta = ?, iva_porcentaje = 0, activo = TRUE WHERE id = ?',
-              [nombre, descripcionCompleta, proveedorId, f.precioVentaSugerido, productoId]
+              `UPDATE productos SET nombre = ?, marca = COALESCE(NULLIF(?, ''), marca), codigo_equivalencia = COALESCE(NULLIF(?, ''), codigo_equivalencia), descripcion = ?, proveedor_id = ?, precio_venta = ?, iva_porcentaje = 0, activo = TRUE WHERE id = ?`,
+              [nombre, f.marca, f.codigoEquivalencia, descripcionCompleta, proveedorId, f.precioVentaSugerido, productoId]
             );
           } else if (tipo === 'catalogo') {
             await cx.query(
-              'UPDATE productos SET nombre = ?, descripcion = ?, proveedor_id = ?, precio_costo = ?, precio_venta = COALESCE(?, precio_venta), iva_porcentaje = ?, activo = TRUE WHERE id = ?',
-              [nombre, descripcionCompleta, proveedorId, f.precio, f.precioVentaSugerido, f.iva, productoId]
+              `UPDATE productos SET nombre = ?, marca = COALESCE(NULLIF(?, ''), marca), codigo_equivalencia = COALESCE(NULLIF(?, ''), codigo_equivalencia), descripcion = ?, proveedor_id = ?, precio_costo = ?, precio_venta = COALESCE(?, precio_venta), iva_porcentaje = ?, activo = TRUE WHERE id = ?`,
+              [nombre, f.marca, f.codigoEquivalencia, descripcionCompleta, proveedorId, f.precio, f.precioVentaSugerido, f.iva, productoId]
             );
           }
           actualizados++;
         } else {
           const costoInicial = ['oferta', 'servicio'].includes(tipo) ? 0 : f.precio;
           const [p] = await cx.query(
-            `INSERT INTO productos (sku, nombre, descripcion, proveedor_id, precio_costo, precio_venta, iva_porcentaje, stock_minimo, unidad_medida, activo)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'unidad', TRUE)`,
-            [sku, nombre, descripcionCompleta, proveedorId, costoInicial, ['catalogo', 'servicio'].includes(tipo) ? (f.precioVentaSugerido ?? 0) : 0, f.iva]
+            `INSERT INTO productos (sku, nombre, marca, codigo_equivalencia, descripcion, proveedor_id, precio_costo, precio_venta, iva_porcentaje, stock_minimo, unidad_medida, activo)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unidad', TRUE)`,
+            [sku, nombre, f.marca || null, f.codigoEquivalencia || null, descripcionCompleta, proveedorId, costoInicial, ['catalogo', 'servicio'].includes(tipo) ? (f.precioVentaSugerido ?? 0) : 0, f.iva]
           );
           productoId = p.insertId;
           creados++;
