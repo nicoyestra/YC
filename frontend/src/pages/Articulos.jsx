@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import api from '../api/client';
 import { exportarExcel } from '../utils/exportarExcel';
 import * as XLSX from 'xlsx';
@@ -39,6 +39,8 @@ export default function Articulos() {
     useState(false);
 
   const [buscando, setBuscando] = useState(false);
+  const [hayMas, setHayMas] = useState(false);
+  const [cargandoMas, setCargandoMas] = useState(false);
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nuevo, setNuevo] = useState(VACIO);
   const [editandoId, setEditandoId] = useState(null);
@@ -56,6 +58,7 @@ export default function Articulos() {
   const buscadorRef = useRef(null);
   const buscadorCodigoRef = useRef(null);
   const codigoInputRef = useRef(null);
+  const busquedaActivaRef = useRef(0);
 
   async function cargarProveedores() {
     try {
@@ -76,73 +79,106 @@ export default function Articulos() {
     }
   }
 
-  async function obtenerProductos(filtro = '') {
+  // La pantalla trabaja por bloques de 50 artículos. La exportación puede
+  // pedir el catálogo completo de forma explícita cuando el usuario la solicita.
+  const TAMANO_PAGINA = 50;
+
+  async function obtenerProductos(filtro = '', offset = 0, paginado = true) {
     const texto = filtro.trim();
+    const params = {};
+    if (texto) params.buscar = texto;
+    if (paginado) {
+      params.limite = TAMANO_PAGINA;
+      params.offset = offset;
+    }
 
-    const { data } = await api.get('/productos', {
-      params: texto ? { buscar: texto } : {},
-    });
-
+    const { data } = await api.get('/productos', { params });
     return Array.isArray(data) ? data : [];
   }
 
   async function cargarProductos(filtro = '') {
+    const solicitud = ++busquedaActivaRef.current;
     try {
       setBuscando(true);
+      setCargandoMas(false);
+      setHayMas(false);
       setError('');
 
-      const resultados = await obtenerProductos(filtro);
+      const resultados = await obtenerProductos(filtro, 0, true);
+      if (solicitud !== busquedaActivaRef.current) return resultados;
       setProductos(resultados);
-
+      setHayMas(resultados.length === TAMANO_PAGINA);
       return resultados;
     } catch (err) {
-      setProductos([]);
-      setError(
-        err.response?.data?.error ||
-          'No se pudieron cargar los artículos'
-      );
-
+      if (solicitud === busquedaActivaRef.current) {
+        setProductos([]);
+        setHayMas(false);
+        setError(err.response?.data?.error || 'No se pudieron cargar los artículos');
+      }
       return [];
     } finally {
-      setBuscando(false);
+      if (solicitud === busquedaActivaRef.current) setBuscando(false);
+    }
+  }
+
+  async function cargarMasProductos() {
+    if (cargandoMas || !hayMas) return;
+    const solicitud = busquedaActivaRef.current;
+    try {
+      setCargandoMas(true);
+      const resultados = await obtenerProductos(busqueda, productos.length, true);
+      if (solicitud !== busquedaActivaRef.current) return;
+      setProductos((actuales) => [...actuales, ...resultados]);
+      setHayMas(resultados.length === TAMANO_PAGINA);
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudieron cargar más artículos');
+    } finally {
+      if (solicitud === busquedaActivaRef.current) setCargandoMas(false);
     }
   }
 
   useEffect(() => {
-    cargarProductos();
     cargarProveedores();
     cargarPreciosOferta();
   }, []);
 
   useEffect(() => {
     const texto = busqueda.trim();
+    const solicitud = ++busquedaActivaRef.current;
+    let cancelado = false;
 
     const temporizador = setTimeout(async () => {
       if (!texto) {
         setSugerencias([]);
         setMostrarSugerencias(false);
-        await cargarProductos();
-        return;
       }
 
       try {
         setBuscando(true);
-
-        const resultados = await obtenerProductos(texto);
-
+        setHayMas(false);
+        const resultados = await obtenerProductos(texto, 0, true);
+        if (cancelado || solicitud !== busquedaActivaRef.current) return;
         setProductos(resultados);
-        setSugerencias(resultados.slice(0, 8));
-        setMostrarSugerencias(true);
+        setHayMas(resultados.length === TAMANO_PAGINA);
+        if (texto) {
+          setSugerencias(resultados.slice(0, 8));
+          setMostrarSugerencias(true);
+        }
       } catch {
+        if (cancelado || solicitud !== busquedaActivaRef.current) return;
         setProductos([]);
+        setHayMas(false);
         setSugerencias([]);
-        setMostrarSugerencias(true);
+        setMostrarSugerencias(Boolean(texto));
       } finally {
-        setBuscando(false);
+        if (!cancelado && solicitud === busquedaActivaRef.current) setBuscando(false);
       }
-    }, 300);
+    }, texto ? 180 : 0);
 
-    return () => clearTimeout(temporizador);
+    return () => {
+      cancelado = true;
+      clearTimeout(temporizador);
+    };
   }, [busqueda]);
 
   useEffect(() => {
@@ -159,7 +195,7 @@ export default function Articulos() {
         setBuscando(true);
         setError('');
 
-        const resultados = await obtenerProductos(codigo);
+        const resultados = await obtenerProductos(codigo, 0, true);
 
         const coincidencias = resultados
           .filter((producto) =>
@@ -215,6 +251,7 @@ export default function Articulos() {
   function seleccionarProducto(producto) {
     setBusqueda(producto.nombre);
     setProductos([producto]);
+    setHayMas(false);
     setSugerencias([]);
     setMostrarSugerencias(false);
     setExpandido(null);
@@ -225,6 +262,7 @@ export default function Articulos() {
     setCodigoBusqueda(producto.codigo_barras || '');
     setBusqueda(producto.nombre);
     setProductos([producto]);
+    setHayMas(false);
     setSugerencias([]);
     setSugerenciasCodigo([]);
     setMostrarSugerencias(false);
@@ -239,7 +277,6 @@ export default function Articulos() {
     setMostrarSugerencias(false);
     setExpandido(null);
     setError('');
-    cargarProductos();
   }
 
   function limpiarCodigo() {
@@ -609,25 +646,42 @@ export default function Articulos() {
     }
   }
 
-  function exportarArticulos() {
-    const datos = productos.map((producto) => ({
-      SKU: producto.sku || '',
-      'Código de barras': producto.codigo_barras || '',
-      Nombre: producto.nombre || '',
-      Descripción: producto.descripcion || '',
-      Proveedor: producto.proveedor_nombre || '',
-      'Precio de compra': Number(producto.precio_costo || 0),
-      'Precio de venta': Number(producto.precio_venta || 0),
-      'IVA %': Number(producto.iva_porcentaje || 0),
-      'Stock actual': Number(producto.stock_total || 0),
-      'Stock mínimo': Number(producto.stock_minimo || 0),
-    }));
-
-    exportarExcel(datos, 'Articulos_YC_System');
+  async function exportarArticulos() {
+    try {
+      setBuscando(true);
+      const todosLosProductos = await obtenerProductos(busqueda, 0, false);
+      const datos = todosLosProductos.map((producto) => ({
+        SKU: producto.sku || '',
+        'Código de barras': producto.codigo_barras || '',
+        Nombre: producto.nombre || '',
+        Descripción: producto.descripcion || '',
+        Proveedor: producto.proveedor_nombre || '',
+        'Precio de compra': Number(producto.precio_costo || 0),
+        'Precio de venta': Number(producto.precio_venta || 0),
+        'IVA %': Number(producto.iva_porcentaje || 0),
+        'Stock actual': Number(producto.stock_total || 0),
+        'Stock mínimo': Number(producto.stock_minimo || 0),
+      }));
+      exportarExcel(datos, 'Articulos_YC_System');
+    } catch (err) {
+      setError(err.response?.data?.error || 'No se pudo exportar el catálogo');
+    } finally {
+      setBuscando(false);
+    }
   }
 
+  const ofertasPorProducto = useMemo(() => {
+    const mapa = new Map();
+    for (const oferta of preciosOferta) {
+      const id = Number(oferta.producto_id);
+      if (!mapa.has(id)) mapa.set(id, []);
+      mapa.get(id).push(oferta);
+    }
+    return mapa;
+  }, [preciosOferta]);
+
   const productosVisibles = productos.filter((producto) => {
-    const ofertasProducto = preciosOferta.filter((o) => Number(o.producto_id) === Number(producto.id));
+    const ofertasProducto = ofertasPorProducto.get(Number(producto.id)) || [];
     const tieneOferta = ofertasProducto.length > 0;
     if (filtroOfertas === 'con_oferta' && !tieneOferta) return false;
     if (filtroOfertas === 'sin_oferta' && tieneOferta) return false;
@@ -1204,7 +1258,7 @@ export default function Articulos() {
           </select>
         </div>
         <div style={{ color: '#475569', paddingBottom: 8 }}>
-          Mostrando <strong>{productosVisibles.length}</strong> de {productos.length} artículos · <strong>{productos.filter((p) => preciosOferta.some((o) => Number(o.producto_id) === Number(p.id))).length}</strong> con oferta
+          Mostrando <strong>{productosVisibles.length}</strong> de {productos.length} cargados · <strong>{productos.filter((p) => (ofertasPorProducto.get(Number(p.id)) || []).length > 0).length}</strong> con oferta
         </div>
       </section>
 
@@ -1241,7 +1295,9 @@ export default function Articulos() {
               </tr>
             )}
 
-            {productosVisibles.map((producto) => (
+            {productosVisibles.map((producto) => {
+              const ofertasDelProducto = ofertasPorProducto.get(Number(producto.id)) || [];
+              return (
               <Fragment key={producto.id}>
                 <tr>
                   <td>{producto.sku}</td>
@@ -1255,9 +1311,9 @@ export default function Articulos() {
                     <small> (con IVA)</small>
                   </td>
                   <td>
-                    {preciosOferta.filter((o) => Number(o.producto_id) === Number(producto.id)).length ? (
+                    {ofertasDelProducto.length ? (
                       <div style={{ minWidth: 150 }}>
-                        {preciosOferta.filter((o) => Number(o.producto_id) === Number(producto.id)).map((o) => (
+                        {ofertasDelProducto.map((o) => (
                           <div key={o.id} style={{ marginBottom: 6 }}>
                             <strong>{o.proveedor_nombre}</strong>
                             <div>${Number(o.precio_neto || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <small>(neto)</small></div>
@@ -1322,9 +1378,27 @@ export default function Articulos() {
                   </tr>
                 )}
               </Fragment>
-            ))}
+              );
+            })}
           </tbody>
         </table>
+        {hayMas && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 18 }}>
+            <button
+              type="button"
+              className="boton boton-secundario"
+              onClick={cargarMasProductos}
+              disabled={cargandoMas || buscando}
+            >
+              {cargandoMas ? 'Cargando artículos...' : `Cargar 50 más ( ${productos.length} cargados )`}
+            </button>
+          </div>
+        )}
+        {!hayMas && productos.length > 0 && (
+          <p style={{ textAlign: 'center', color: '#64748b', margin: '12px 0 0' }}>
+            Se muestran {productos.length} artículos.
+          </p>
+        )}
       </div>
 
       {productoComparar && (() => {

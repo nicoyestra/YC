@@ -9,6 +9,25 @@ async function asegurarColumnasMarca(db) {
   if (marcaNueva) await db.query("ALTER TABLE productos ADD COLUMN marca VARCHAR(60) NULL AFTER nombre");
   const [equiv] = await db.query(`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'productos' AND COLUMN_NAME = 'codigo_equivalencia'`);
   if (!equiv.length) await db.query("ALTER TABLE productos ADD COLUMN codigo_equivalencia VARCHAR(100) NULL AFTER marca");
+
+  // Índice para acelerar búsquedas por nombre en catálogos grandes.
+  const [indiceNombre] = await db.query(`
+    SELECT INDEX_NAME
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'productos'
+      AND INDEX_NAME = 'idx_productos_nombre'
+    LIMIT 1
+  `);
+  if (!indiceNombre.length) {
+    try {
+      await db.query('CREATE INDEX idx_productos_nombre ON productos (nombre)');
+    } catch (error) {
+      // Otra petición puede haber creado el índice al mismo tiempo.
+      if (error.code !== 'ER_DUP_KEYNAME') throw error;
+    }
+  }
+
   // No se infieren marcas ni proveedores durante la migración: cada empresa conserva sus datos.
   if (db && (typeof db === 'object' || typeof db === 'function')) columnasMarcaPorDb.add(db);
 }
@@ -19,69 +38,85 @@ async function listar(req, res) {
     await asegurarColumnasMarca(db);
 
     const { buscar } = req.query;
+    const usarPaginacion = req.query.limite !== undefined;
+    const limiteSolicitado = Number.parseInt(req.query.limite, 10);
+    const offsetSolicitado = Number.parseInt(req.query.offset, 10);
+    const limite = usarPaginacion
+      ? Math.min(Math.max(Number.isFinite(limiteSolicitado) ? limiteSolicitado : 50, 1), 100)
+      : null;
+    const offset = usarPaginacion
+      ? Math.max(Number.isFinite(offsetSolicitado) ? offsetSolicitado : 0, 0)
+      : 0;
 
+    // Se evita el JOIN + GROUP BY sobre todas las columnas del producto.
+    // El stock se calcula con una subconsulta indexada por producto_id.
     let sql = `
       SELECT
         p.*,
         c.nombre AS categoria_nombre,
         pr.nombre AS proveedor_nombre,
-        COALESCE(SUM(s.cantidad), 0) AS stock_total
+        (
+          SELECT COALESCE(SUM(s.cantidad), 0)
+          FROM stock s
+          WHERE s.producto_id = p.id
+        ) AS stock_total
       FROM productos p
       LEFT JOIN categorias_producto c
         ON p.categoria_id = c.id
       LEFT JOIN proveedores pr
         ON p.proveedor_id = pr.id
-      LEFT JOIN stock s
-        ON s.producto_id = p.id
       WHERE 1=1
     `;
 
     const params = [];
+    const texto = String(buscar || '').trim();
 
-    if (buscar) {
+    if (texto) {
+      const contiene = `%${texto}%`;
+      const comienza = `${texto}%`;
       sql += `
         AND (
-          p.sku LIKE ?
-          OR p.nombre LIKE ?
+          p.sku = ?
+          OR p.codigo_barras = ?
+          OR p.sku LIKE ?
           OR p.codigo_barras LIKE ?
+          OR p.sku LIKE ?
+          OR p.codigo_barras LIKE ?
+          OR p.nombre LIKE ?
           OR p.descripcion LIKE ?
         )
       `;
+      params.push(texto, texto, comienza, comienza, contiene, contiene, contiene, contiene);
 
-      const like = `%${buscar}%`;
-
-      params.push(
-        like,
-        like,
-        like,
-        like
-      );
+      sql += `
+        ORDER BY
+          CASE
+            WHEN p.sku = ? THEN 0
+            WHEN p.codigo_barras = ? THEN 1
+            WHEN p.sku LIKE ? THEN 2
+            WHEN p.codigo_barras LIKE ? THEN 3
+            WHEN p.nombre LIKE ? THEN 4
+            ELSE 5
+          END,
+          p.nombre
+      `;
+      params.push(texto, texto, comienza, comienza, comienza);
+    } else {
+      sql += ' ORDER BY p.nombre';
     }
 
-    sql += `
-      GROUP BY p.id
-      ORDER BY p.nombre
-    `;
+    if (usarPaginacion) {
+      sql += ' LIMIT ? OFFSET ?';
+      params.push(limite, offset);
+    }
 
-    const [rows] = await db.query(
-      sql,
-      params
-    );
-
+    const [rows] = await db.query(sql, params);
     res.json(rows);
-
   } catch (err) {
-    console.error(
-      'Error listando productos:',
-      err
-    );
-
-    res.status(500).json({
-      error: 'Error al listar productos'
-    });
+    console.error('Error listando productos:', err);
+    res.status(500).json({ error: 'Error al listar productos' });
   }
 }
-
 
 async function obtener(req, res) {
   try {
